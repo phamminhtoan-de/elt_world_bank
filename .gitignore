@@ -3,4 +3,5 @@
 __pycache__/
 *.py[cod]
 logs/
-data/raw/*.csv
+data/
+.pytest_cache/
