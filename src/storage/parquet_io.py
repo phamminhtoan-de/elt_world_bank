@@ -13,8 +13,21 @@ from src.extract.parser import (
     chunked,
     records_to_dataframe,
 )
+from src.storage.database import TABLE_DDL_COLUMNS
 
 logger = get_logger(__name__)
+
+
+def discover_parquet_files(data_dir=None):
+    target_dir = Path(data_dir) if data_dir is not None else settings.raw_data_dir
+    parquet_paths = sorted(
+        path
+        for path in target_dir.glob("*.parquet")
+        if path.stem.split("__")[0] in TABLE_DDL_COLUMNS
+    )
+    if not parquet_paths:
+        raise FileNotFoundError(f"Không tìm thấy file Parquet nào trong {target_dir}")
+    return parquet_paths
 
 
 def read_parquet_batch_id(parquet_file):

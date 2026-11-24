@@ -1,8 +1,8 @@
 from pathlib import Path
 import sys
 
-from src.extract.extract import get_ingestion_tasks
-from src.metadata.incremental import plan_incremental_tasks
+from src.extract.extractor import get_ingestion_tasks
+from src.reliability.incremental import plan_incremental_tasks
 
 
 def test_plan_incremental_tasks():

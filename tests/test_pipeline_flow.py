@@ -7,9 +7,12 @@ import psycopg
 from main import run_ingestion
 from src.config.settings import settings
 from src.extract.parser import flatten_country_row, flatten_indicator_meta_row
-from src.load import load as load_module
-from src.pipeline import recovery as recovery_module
+from src.load import loader as load_module
+from src.pipeline import extract_stage as extract_stage_module
+from src.pipeline import load_only as load_only_module
+from src.pipeline import load_stage as load_stage_module
 from src.pipeline import runner as runner_module
+from src.reliability import recovery as recovery_module
 from src.storage.parquet_io import write_records_to_parquet
 from tests.helpers import assert_raises, make_fake_conn, make_indicator_record, resolve_dir
 
@@ -155,25 +158,30 @@ def make_pipeline_harness(*, fail_on_task=None):
         with ExitStack() as stack:
             if fetch_indicators_return is not None:
                 mock_fetch = stack.enter_context(
-                    patch.object(runner_module, "fetch_source_indicators", return_value=fetch_indicators_return)
+                    patch.object(extract_stage_module, "fetch_source_indicators", return_value=fetch_indicators_return)
                 )
             else:
                 mock_fetch = None
-            stack.enter_context(patch.object(runner_module, "fetch_source_last_updated", return_value="2026-11-11"))
+            stack.enter_context(patch.object(extract_stage_module, "fetch_source_last_updated", return_value="2026-11-11"))
+            stack.enter_context(patch.object(extract_stage_module, "open_db_connection", side_effect=fake_open_db))
+            stack.enter_context(patch.object(load_stage_module, "open_db_connection", side_effect=fake_open_db))
+            stack.enter_context(patch.object(load_only_module, "open_db_connection", side_effect=fake_open_db))
             stack.enter_context(patch.object(runner_module, "open_db_connection", side_effect=fake_open_db))
             stack.enter_context(patch.object(recovery_module, "open_db_connection", side_effect=fake_open_db))
             stack.enter_context(patch.object(runner_module, "ensure_state_schema", side_effect=lambda *a, **kw: None))
+            stack.enter_context(patch.object(load_only_module, "ensure_state_schema", side_effect=lambda *a, **kw: None))
             stack.enter_context(patch.object(runner_module, "get_resumable_run_id", side_effect=fake_get_resumable_run_id))
+            stack.enter_context(patch.object(load_only_module, "get_resumable_run_id", side_effect=fake_get_resumable_run_id))
             stack.enter_context(
                 patch.object(runner_module, "get_previously_loaded_tasks", side_effect=fake_get_previously_loaded_tasks)
             )
             stack.enter_context(patch.object(runner_module, "get_watermarks", return_value={}))
             stack.enter_context(patch.object(runner_module, "create_or_resume_run", side_effect=fake_create_or_resume_run))
-            stack.enter_context(patch.object(runner_module, "save_extract_checkpoint", side_effect=fake_save_extract_cp))
+            stack.enter_context(patch.object(load_only_module, "create_or_resume_run", side_effect=fake_create_or_resume_run))
             stack.enter_context(patch.object(recovery_module, "save_extract_checkpoint", side_effect=fake_save_extract_cp))
-            stack.enter_context(patch.object(runner_module, "finish_run", side_effect=fake_finish_run))
+            stack.enter_context(patch.object(load_stage_module, "finish_run", side_effect=fake_finish_run))
             stack.enter_context(patch.object(recovery_module, "finish_run", side_effect=fake_finish_run))
-            stack.enter_context(patch.object(runner_module, "extract_task_to_parquet", side_effect=fake_extract_task))
+            stack.enter_context(patch.object(extract_stage_module, "extract_task_to_parquet", side_effect=fake_extract_task))
             stack.enter_context(patch.object(load_module, "update_load_checkpoint_in_cur", side_effect=fake_update_load_cp))
             stack.enter_context(patch.object(load_module, "upsert_watermark_in_cur", side_effect=lambda *a, **kw: None))
             yield mock_fetch
@@ -396,7 +404,7 @@ def test_load_stage_ensures_tables_once_and_parquet_cleanup(tmp_path=None):
     harness = make_pipeline_harness()
     with harness["patched_env"]():
         with (
-            patch.object(runner_module, "ensure_raw_table") as mock_runner_ensure,
+            patch.object(load_stage_module, "ensure_raw_table") as mock_runner_ensure,
             patch.object(load_module, "ensure_raw_table") as mock_load_ensure,
         ):
             results = run_ingestion(
@@ -432,7 +440,7 @@ def test_load_stage_ensures_tables_once_and_parquet_cleanup(tmp_path=None):
         return real_load_fn(conn, parquet_path, **kwargs)
 
     with fail_harness["patched_env"]():
-        with patch.object(runner_module, "load_parquet_to_postgres", side_effect=load_fail_on_indicator):
+        with patch.object(load_stage_module, "load_parquet_to_postgres", side_effect=load_fail_on_indicator):
             assert_raises(
                 RuntimeError,
                 run_ingestion,
@@ -508,8 +516,8 @@ def test_partial_failure_isolation_and_reconnect_and_load_only(tmp_path=None):
 
     with rc_harness["patched_env"]():
         with (
-            patch.object(runner_module, "load_parquet_to_postgres", side_effect=flaky_db_load),
-            patch.object(runner_module.time, "sleep", side_effect=lambda *_: None),
+            patch.object(load_stage_module, "load_parquet_to_postgres", side_effect=flaky_db_load),
+            patch.object(load_stage_module.time, "sleep", side_effect=lambda *_: None),
         ):
             rc_res = run_ingestion(
                 data_dir=rc_dir,
@@ -557,8 +565,8 @@ def test_partial_failure_isolation_and_reconnect_and_load_only(tmp_path=None):
     lo_harness = make_pipeline_harness()
     with lo_harness["patched_env"]():
         with (
-            patch.object(runner_module, "fetch_source_indicators", side_effect=AssertionError("Không được gọi API ở load_only")),
-            patch.object(runner_module, "fetch_source_last_updated", side_effect=AssertionError("Không được gọi API ở load_only")),
+            patch.object(extract_stage_module, "fetch_source_indicators", side_effect=AssertionError("Không được gọi API ở load_only")),
+            patch.object(extract_stage_module, "fetch_source_last_updated", side_effect=AssertionError("Không được gọi API ở load_only")),
         ):
             lo_res = run_ingestion(
                 data_dir=lo_dir,

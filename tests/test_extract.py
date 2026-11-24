@@ -1,8 +1,8 @@
 from pathlib import Path
 import sys
 from unittest.mock import MagicMock, patch
-from src.extract import extract as extract_module
-from src.extract.extract import (
+from src.extract import extractor as extract_module
+from src.extract.extractor import (
     extract_task_to_parquet,
     get_ingestion_tasks,
     iter_countries,

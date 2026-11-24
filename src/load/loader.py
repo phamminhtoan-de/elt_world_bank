@@ -19,20 +19,23 @@ from src.load.sql_ops import (
     upsert_from_temp_table,
     validate_loaded_batch_in_cur,
 )
-from src.metadata.state import (
+from src.reliability.checkpoints import (
     record_load_failure,
     update_load_checkpoint_in_cur,
-    upsert_watermark_in_cur,
 )
+from src.reliability.watermarks import upsert_watermark_in_cur
 from src.storage.database import (
-    TABLE_DDL_COLUMNS,
     ensure_raw_table,
     ensure_schema,
     is_conn_unusable,
     is_transient_db_error,
     open_db_connection,
 )
-from src.storage.parquet_io import iter_parquet_dataframe_chunks, read_parquet_batch_id
+from src.storage.parquet_io import (
+    discover_parquet_files,
+    iter_parquet_dataframe_chunks,
+    read_parquet_batch_id,
+)
 
 logger = get_logger(__name__)
 
@@ -309,18 +312,6 @@ def load_parquet_to_postgres(
         ensure_table=ensure_table,
         suppress_transient_failure_log=suppress_transient_failure_log,
     )
-
-
-def discover_parquet_files(data_dir=None):
-    target_dir = Path(data_dir) if data_dir is not None else settings.raw_data_dir
-    parquet_paths = sorted(
-        path
-        for path in target_dir.glob("*.parquet")
-        if path.stem.split("__")[0] in TABLE_DDL_COLUMNS
-    )
-    if not parquet_paths:
-        raise FileNotFoundError(f"Không tìm thấy file Parquet nào trong {target_dir}")
-    return parquet_paths
 
 
 def load_parquet_files(

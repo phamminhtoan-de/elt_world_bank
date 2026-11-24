@@ -1,6 +1,6 @@
 from psycopg import sql
 
-from src.metadata.schema import CHECKPOINTS_TABLE, RUNS_TABLE, WATERMARKS_TABLE
+from src.reliability.schema import CHECKPOINTS_TABLE, RUNS_TABLE, WATERMARKS_TABLE
 from src.storage.database import table_ref
 
 

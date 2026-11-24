@@ -1,23 +1,25 @@
 from pathlib import Path
 import sys
-from src.metadata import state as state_module
+from src.reliability import runs as runs_module
+from src.reliability import schema as schema_module
+from src.reliability import watermarks as watermarks_module
 from tests.helpers import assert_raises, make_fake_conn
 
 
 def test_state_schema_checkpoints_and_watermarks():
-    assert state_module.normalize_task_spec(("raw_worldbank_countries", "https://api/country")) == (
+    assert schema_module.normalize_task_spec(("raw_worldbank_countries", "https://api/country")) == (
         "raw_worldbank_countries",
         "raw_worldbank_countries",
         None,
         "https://api/country",
     )
-    assert state_module.normalize_task_spec(
+    assert schema_module.normalize_task_spec(
         ("tkey", "tbl", "NY.GDP.MKTP.CD", "https://api/ind")
     ) == ("tkey", "tbl", "NY.GDP.MKTP.CD", "https://api/ind")
-    assert_raises(ValueError, state_module.normalize_task_spec, ("thieu_phan_tu",))
+    assert_raises(ValueError, schema_module.normalize_task_spec, ("thieu_phan_tu",))
 
     state_conn = make_fake_conn()
-    state_module.ensure_state_schema(state_conn, "elt_metadata")
+    schema_module.ensure_state_schema(state_conn, "elt_metadata")
     assert state_conn.transaction_count == 1
     ddl_sql = "\n".join(q for q, _ in state_conn.executed_queries)
     assert "ingestion_runs" in ddl_sql
@@ -33,13 +35,13 @@ def test_state_schema_checkpoints_and_watermarks():
         ("ingestion_checkpoints", "indicator_code"),
         ("ingestion_step_logs", "task_key"),
     ]
-    state_module.ensure_state_schema(ready_state_conn, "elt_metadata")
+    schema_module.ensure_state_schema(ready_state_conn, "elt_metadata")
     ready_ddl_sql = "\n".join(q for q, _ in ready_state_conn.executed_queries)
     assert "ALTER TABLE" not in ready_ddl_sql
     assert "UPDATE" not in ready_ddl_sql
 
     run_conn = make_fake_conn()
-    run_id, resumed, _ = state_module.create_or_resume_run(
+    run_id, resumed, _ = runs_module.create_or_resume_run(
         run_conn,
         "elt_metadata",
         table_specs=(
@@ -59,7 +61,7 @@ def test_state_schema_checkpoints_and_watermarks():
 
     wm_conn = make_fake_conn()
     with wm_conn.cursor() as cur:
-        state_module.upsert_watermark_in_cur(
+        watermarks_module.upsert_watermark_in_cur(
             cur,
             "elt_metadata",
             target_schema="bronze",
@@ -79,7 +81,7 @@ def test_state_schema_checkpoints_and_watermarks():
     assert wm_params[5] == "2026-11-11"
 
     finish_conn = make_fake_conn()
-    state_module.finish_run(
+    runs_module.finish_run(
         finish_conn,
         "elt_metadata",
         ingestion_run_id="run-1",

@@ -32,7 +32,7 @@ def test_load_settings_env_and_pipeline_yaml(tmp_path=None):
     with patch.dict(os.environ, TEST_ENV, clear=False):
         default_cfg = load_settings(CONFIG_PATH)
 
-    assert default_cfg.config_path == BASE_DIR / "src" / "pipeline.yml"
+    assert default_cfg.config_path == BASE_DIR / "src" / "config" / "pipeline.yml"
     assert default_cfg.world_bank_api_url == "https://api.worldbank.org/v2"
     assert default_cfg.world_bank_per_page == 5000
     assert default_cfg.world_bank_sleep_seconds == 3.0

@@ -6,7 +6,7 @@ import yaml
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 ENV_PATH = BASE_DIR / ".env"
-CONFIG_PATH = BASE_DIR / "src" / "pipeline.yml"
+CONFIG_PATH = BASE_DIR / "src" / "config" / "pipeline.yml"
 LOG_DIR = BASE_DIR / "logs"
 RAW_DATA_DIR = BASE_DIR / "data"
 

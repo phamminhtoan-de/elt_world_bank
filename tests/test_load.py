@@ -8,9 +8,8 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 from src.extract.parser import flatten_country_row
-from src.load import load as load_module
-from src.load.load import (
-    discover_parquet_files,
+from src.load import loader as load_module
+from src.load.loader import (
     load_parquet_files,
     load_parquet_to_postgres,
     serialize_dataframe_chunk,
@@ -18,7 +17,7 @@ from src.load.load import (
     stream_chunks_to_postgres,
     validate_loaded_batch_in_cur,
 )
-from src.storage.parquet_io import write_records_to_parquet
+from src.storage.parquet_io import discover_parquet_files, write_records_to_parquet
 from tests.helpers import assert_raises, make_fake_conn, make_indicator_record, resolve_dir
 
 

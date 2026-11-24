@@ -3,11 +3,23 @@ from pathlib import Path
 import time
 
 from src.config.logger import get_logger
-from src.metadata.state import finish_run, save_extract_checkpoint
+from src.reliability.checkpoints import save_extract_checkpoint
+from src.reliability.runs import finish_run
 from src.storage.database import is_conn_unusable, is_transient_db_error, open_db_connection
 from src.storage.parquet_io import read_parquet_file_batch_id, validate_parquet_file
 
 logger = get_logger("elt.pipeline")
+
+
+def reset_db_conn(db_stack, open_conn_fn=None):
+    opener = open_conn_fn or open_db_connection
+    db_stack.close()
+    return db_stack.enter_context(opener())
+
+
+def build_failure_summary(failures):
+    preview = "; ".join(f"{task}: {msg}" for task, msg in failures[:5])
+    return f"Hoàn tất có lỗi tại {len(failures)} chỉ số ({preview})"
 
 
 def mark_run_failed(state_schema, ingestion_run_id, error_message):
