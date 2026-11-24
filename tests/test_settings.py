@@ -3,10 +3,6 @@ from pathlib import Path
 import sys
 from unittest.mock import patch
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
-
 from src.config.settings import BASE_DIR, CONFIG_PATH, VALID_LOAD_MODES, load_settings
 from tests.helpers import assert_raises, resolve_dir
 

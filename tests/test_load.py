@@ -8,10 +8,6 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
-
 from src.load import load as load_module
 from src.load.load import (
     discover_parquet_files,

@@ -2,10 +2,6 @@ from pathlib import Path
 import sys
 from unittest.mock import MagicMock, patch
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
-
 from src.extract import extract as extract_module
 from src.extract.extract import (
     extract_task_to_parquet,

@@ -3,10 +3,6 @@ import sys
 from unittest.mock import MagicMock, patch
 import requests
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
-
 from src.extract import api_client as api_module
 from src.extract.api_client import (
     fetch_json_page,

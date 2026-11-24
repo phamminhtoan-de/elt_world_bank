@@ -3,10 +3,6 @@ from pathlib import Path
 import sys
 from unittest.mock import patch
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
-
 from main import run_ingestion
 from src.extract.parser import flatten_country_row, flatten_indicator_meta_row
 from src.load import load as load_module

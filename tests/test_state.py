@@ -1,10 +1,6 @@
 from pathlib import Path
 import sys
 
-ROOT_DIR = Path(__file__).resolve().parents[2]
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
-
 from src.metadata import state as state_module
 from tests.helpers import assert_raises, make_fake_conn
 
