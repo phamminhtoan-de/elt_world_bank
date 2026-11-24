@@ -1,6 +1,7 @@
 from pathlib import Path
 import sys
 from unittest.mock import MagicMock, patch
+import psycopg
 from src.storage import database as db_module
 from src.storage.database import (
     INGESTION_META_DDL_COLUMNS,
@@ -11,6 +12,8 @@ from src.storage.database import (
     backfill_missing_raw_payloads,
     ensure_raw_table,
     ensure_schema,
+    is_conn_unusable,
+    is_transient_db_error,
     open_db_connection,
     table_ref,
 )
@@ -103,6 +106,16 @@ def test_database_ddl_and_connection_lifecycle():
         except RuntimeError:
             pass
     assert fake_conn.closed is True
+
+    assert is_transient_db_error(psycopg.OperationalError("connection lost")) is True
+    assert is_transient_db_error(psycopg.InterfaceError("interface closed")) is True
+    assert is_transient_db_error(ValueError("bad value")) is False
+
+    live_conn = make_fake_conn()
+    assert is_conn_unusable(None) is True
+    assert is_conn_unusable(live_conn) is False
+    live_conn.close()
+    assert is_conn_unusable(live_conn) is True
 
 
 def test_backfill_missing_raw_payloads():

@@ -40,12 +40,14 @@ def test_load_settings_env_and_pipeline_yaml(tmp_path=None):
     assert default_cfg.tgt_db_schema == "bronze"
     assert default_cfg.state_db_schema == "elt_metadata"
     assert default_cfg.elt_load_mode in VALID_LOAD_MODES
+    assert default_cfg.elt_load_only is False
     assert default_cfg.elt_skip_duplicate_batch is True
     assert default_cfg.elt_chunk_size == 5000
     assert default_cfg.elt_auto_resume is True
     assert default_cfg.elt_fresh is False
     assert default_cfg.elt_incremental_lookback_years == 3
     assert default_cfg.save_raw_parquet is True
+    assert default_cfg.db_max_retries == 3
     assert default_cfg.elt_run_id is None
     assert default_cfg.raw_data_dir == BASE_DIR / "data"
     assert default_cfg.backfill_raw_payload_enabled is False
@@ -71,11 +73,13 @@ def test_load_settings_env_and_pipeline_yaml(tmp_path=None):
             [
                 "pipeline:",
                 "  load_mode: upsert",
+                "  load_only: true",
                 "  skip_duplicate_batch: false",
                 "  chunk_size: 1200",
                 "  auto_resume: false",
                 "  fresh: true",
                 "  save_raw_parquet: false",
+                "  db_max_retries: 5",
                 "  run_id: run-override-99",
                 "  data_dir: custom_raw",
                 "incremental:",
@@ -101,12 +105,14 @@ def test_load_settings_env_and_pipeline_yaml(tmp_path=None):
 
     assert custom_cfg.config_path == custom_yml
     assert custom_cfg.elt_load_mode == "upsert"
+    assert custom_cfg.elt_load_only is True
     assert custom_cfg.elt_skip_duplicate_batch is False
     assert custom_cfg.elt_chunk_size == 1200
     assert custom_cfg.elt_auto_resume is False
     assert custom_cfg.elt_fresh is True
     assert custom_cfg.elt_incremental_lookback_years == 0
     assert custom_cfg.save_raw_parquet is False
+    assert custom_cfg.db_max_retries == 5
     assert custom_cfg.elt_run_id == "run-override-99"
     assert custom_cfg.raw_data_dir == BASE_DIR / "custom_raw"
     assert custom_cfg.backfill_raw_payload_enabled is True

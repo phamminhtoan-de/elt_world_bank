@@ -3,6 +3,7 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 from unittest.mock import patch
+import psycopg
 from main import run_ingestion
 from src.config.settings import settings
 from src.extract.parser import flatten_country_row, flatten_indicator_meta_row
@@ -447,10 +448,139 @@ def test_load_stage_ensures_tables_once_and_parquet_cleanup(tmp_path=None):
     assert (fail_dir / "raw_worldbank_indicators__NY.GDP.MKTP.CD.parquet").exists()
 
 
+def test_partial_failure_isolation_and_reconnect_and_load_only(tmp_path=None):
+    iso_dir = resolve_dir(tmp_path) / "isolate_resume"
+    cfg_cleanup = SimpleNamespace(**vars(settings))
+    cfg_cleanup.save_raw_parquet = False
+    cfg_cleanup.db_max_retries = 2
+
+    iso_harness = make_pipeline_harness(fail_on_task="raw_worldbank_indicators__FP.CPI.TOTL.ZG")
+    with iso_harness["patched_env"]():
+        assert_raises(
+            RuntimeError,
+            run_ingestion,
+            data_dir=iso_dir,
+            load_mode="append",
+            chunk_size=2,
+            indicators=("NY.GDP.MKTP.CD", "FP.CPI.TOTL.ZG", "SP.POP.TOTL"),
+            cfg=cfg_cleanup,
+        )
+
+        cps = iso_harness["state_db"]["checkpoints"]["run-1"]
+        assert cps["raw_worldbank_countries"]["load_status"] == "LOADED"
+        assert cps["raw_worldbank_indicator_metadata"]["load_status"] == "LOADED"
+        assert cps["raw_worldbank_indicators__NY.GDP.MKTP.CD"]["load_status"] == "LOADED"
+        assert cps["raw_worldbank_indicators__FP.CPI.TOTL.ZG"]["extract_status"] == "FAILED"
+        assert cps["raw_worldbank_indicators__SP.POP.TOTL"]["load_status"] == "LOADED"
+        assert iso_harness["state_db"]["runs"]["run-1"]["status"] == "FAILED"
+        assert list(iso_dir.glob("*.parquet")) == []
+
+        iso_harness["should_fail"]["value"] = False
+        iso_harness["extract_history"].clear()
+        res_ok = run_ingestion(
+            data_dir=iso_dir,
+            load_mode="append",
+            chunk_size=2,
+            indicators=("NY.GDP.MKTP.CD", "FP.CPI.TOTL.ZG", "SP.POP.TOTL"),
+            cfg=cfg_cleanup,
+        )
+
+    assert iso_harness["extract_history"] == ["raw_worldbank_indicators__FP.CPI.TOTL.ZG"]
+    assert iso_harness["state_db"]["runs"]["run-1"]["status"] == "SUCCESS"
+    assert res_ok == {
+        "raw_worldbank_countries": 1,
+        "raw_worldbank_indicator_metadata": 3,
+        "raw_worldbank_indicators": 3,
+    }
+
+    rc_dir = resolve_dir(tmp_path) / "db_reconnect"
+    cfg_rc = SimpleNamespace(**vars(settings))
+    cfg_rc.db_max_retries = 3
+    rc_harness = make_pipeline_harness()
+    real_load = load_module.load_parquet_to_postgres
+    load_attempts = {"count": 0}
+
+    def flaky_db_load(conn, parquet_path, **kwargs):
+        if kwargs.get("table_name") == "raw_worldbank_indicators" and load_attempts["count"] == 0:
+            load_attempts["count"] += 1
+            raise psycopg.OperationalError("server closed the connection unexpectedly")
+        return real_load(conn, parquet_path, **kwargs)
+
+    with rc_harness["patched_env"]():
+        with (
+            patch.object(runner_module, "load_parquet_to_postgres", side_effect=flaky_db_load),
+            patch.object(runner_module.time, "sleep", side_effect=lambda *_: None),
+        ):
+            rc_res = run_ingestion(
+                data_dir=rc_dir,
+                load_mode="append",
+                chunk_size=2,
+                indicators=("NY.GDP.MKTP.CD",),
+                cfg=cfg_rc,
+            )
+
+    assert load_attempts["count"] == 1
+    assert rc_res == {
+        "raw_worldbank_countries": 1,
+        "raw_worldbank_indicator_metadata": 1,
+        "raw_worldbank_indicators": 1,
+    }
+    assert rc_harness["state_db"]["runs"]["run-1"]["status"] == "SUCCESS"
+    assert all(c.closed for c in rc_harness["opened_conns"])
+
+    lo_dir = resolve_dir(tmp_path) / "load_only"
+    write_records_to_parquet(
+        "raw_worldbank_countries",
+        iter([flatten_country_row({"id": "VNM", "iso2Code": "VN", "name": "Viet Nam"})]),
+        output_dir=lo_dir,
+        chunk_size=2,
+        batch_id="lo-b-1",
+        file_stem="raw_worldbank_countries",
+    )
+    write_records_to_parquet(
+        "raw_worldbank_indicator_metadata",
+        iter([flatten_indicator_meta_row({"id": "NY.GDP.MKTP.CD", "name": "GDP"}, "NY.GDP.MKTP.CD")]),
+        output_dir=lo_dir,
+        chunk_size=2,
+        batch_id="lo-b-2",
+        file_stem="raw_worldbank_indicator_metadata",
+    )
+    write_records_to_parquet(
+        "raw_worldbank_indicators",
+        iter([make_indicator_record(2024, 100.0, code="NY.GDP.MKTP.CD")]),
+        output_dir=lo_dir,
+        chunk_size=2,
+        batch_id="lo-b-3",
+        file_stem="raw_worldbank_indicators__NY.GDP.MKTP.CD",
+    )
+
+    lo_harness = make_pipeline_harness()
+    with lo_harness["patched_env"]():
+        with (
+            patch.object(runner_module, "fetch_source_indicators", side_effect=AssertionError("Không được gọi API ở load_only")),
+            patch.object(runner_module, "fetch_source_last_updated", side_effect=AssertionError("Không được gọi API ở load_only")),
+        ):
+            lo_res = run_ingestion(
+                data_dir=lo_dir,
+                load_mode="append",
+                chunk_size=2,
+                fresh=True,
+                load_only=True,
+            )
+
+    assert lo_res == {
+        "raw_worldbank_countries": 1,
+        "raw_worldbank_indicator_metadata": 1,
+        "raw_worldbank_indicators": 1,
+    }
+    assert lo_harness["state_db"]["runs"]["run-1"]["status"] == "SUCCESS"
+
+
 if __name__ == "__main__":
     test_checkpoint_and_auto_resume()
     test_incremental_new_indicators_and_fresh()
     test_corrupt_parquet_auto_reextract()
     test_recover_metadata_from_file_ready_parquet()
     test_load_stage_ensures_tables_once_and_parquet_cleanup()
+    test_partial_failure_isolation_and_reconnect_and_load_only()
     print("PIPELINE FLOW TESTS PASSED")

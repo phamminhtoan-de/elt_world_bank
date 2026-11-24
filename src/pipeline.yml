@@ -1,5 +1,6 @@
 pipeline:
   load_mode: append
+  load_only: false
   skip_duplicate_batch: true
   chunk_size: 5000
   auto_resume: true
@@ -7,6 +8,7 @@ pipeline:
   run_id: null
   data_dir: data
   save_raw_parquet: true
+  db_max_retries: 3
 
 incremental:
   lookback_years: 3

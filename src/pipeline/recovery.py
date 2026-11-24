@@ -4,7 +4,7 @@ import time
 
 from src.config.logger import get_logger
 from src.metadata.state import finish_run, save_extract_checkpoint
-from src.storage.database import open_db_connection
+from src.storage.database import is_conn_unusable, is_transient_db_error, open_db_connection
 from src.storage.parquet_io import read_parquet_file_batch_id, validate_parquet_file
 
 logger = get_logger("elt.pipeline")
@@ -107,8 +107,14 @@ def try_recover_extracted_parquet(
         "status": "EXTRACTED",
         "task_key": task_key,
     }
-    if conn is not None and not getattr(conn, "closed", False):
-        save_extract_checkpoint(conn, effective_state_schema, **checkpoint_kwargs)
+    if not is_conn_unusable(conn):
+        try:
+            save_extract_checkpoint(conn, effective_state_schema, **checkpoint_kwargs)
+        except Exception as err:
+            if not is_transient_db_error(err):
+                raise
+            with open_db_connection() as active_conn:
+                save_extract_checkpoint(active_conn, effective_state_schema, **checkpoint_kwargs)
     else:
         with open_db_connection() as active_conn:
             save_extract_checkpoint(active_conn, effective_state_schema, **checkpoint_kwargs)
@@ -123,6 +129,30 @@ def try_recover_extracted_parquet(
         expected_batch_id,
     )
     return candidate_path
+
+
+def save_extract_checkpoint_resilient(
+    state_schema,
+    *,
+    conn=None,
+    open_conn_fn=None,
+    max_attempts=3,
+    **checkpoint_kwargs,
+):
+    opener = open_conn_fn or open_db_connection
+    attempts = max(1, max_attempts)
+    for attempt in range(1, attempts + 1):
+        try:
+            if attempt == 1 and not is_conn_unusable(conn):
+                save_extract_checkpoint(conn, state_schema, **checkpoint_kwargs)
+            else:
+                with opener() as active_conn:
+                    save_extract_checkpoint(active_conn, state_schema, **checkpoint_kwargs)
+            return
+        except Exception as err:
+            if not is_transient_db_error(err) or attempt == attempts:
+                raise
+            time.sleep(2 ** (attempt - 1))
 
 
 def record_extract_metadata_with_retry(
@@ -165,7 +195,7 @@ def record_extract_metadata_with_retry(
                     allow_empty=allow_empty,
                     expected_batch_id=batch_id,
                 )
-            if attempt == 1 and conn is not None and not getattr(conn, "closed", False):
+            if attempt == 1 and not is_conn_unusable(conn):
                 save_extract_checkpoint(conn, effective_state_schema, status="EXTRACTED", **checkpoint_kwargs)
             else:
                 with open_db_connection() as retry_conn:

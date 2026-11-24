@@ -28,6 +28,8 @@ from src.storage.database import (
     TABLE_DDL_COLUMNS,
     ensure_raw_table,
     ensure_schema,
+    is_conn_unusable,
+    is_transient_db_error,
     open_db_connection,
 )
 from src.storage.parquet_io import iter_parquet_dataframe_chunks, read_parquet_batch_id
@@ -72,6 +74,7 @@ def stream_chunks_to_postgres(
     auto_populate_raw_payload=None,
     skip_duplicate_batch=None,
     ensure_table=True,
+    suppress_transient_failure_log=False,
 ):
     if load_mode not in VALID_LOAD_MODES:
         raise ValueError(f"load_mode không hợp lệ: '{load_mode}'. Chỉ chấp nhận {sorted(VALID_LOAD_MODES)}.")
@@ -218,21 +221,31 @@ def stream_chunks_to_postgres(
     except Exception as err:
         duration = time.perf_counter() - start_perf
         finished_at = datetime.now(timezone.utc)
+        if suppress_transient_failure_log and is_transient_db_error(err):
+            raise
         if state_schema and ingestion_run_id:
+            fail_kwargs = {
+                "ingestion_run_id": ingestion_run_id,
+                "table_name": table_name,
+                "batch_id": batch_id,
+                "parquet_path": parquet_path,
+                "started_at": started_at,
+                "finished_at": finished_at,
+                "duration_seconds": duration,
+                "error_message": str(err),
+                "task_key": resolved_task_key,
+            }
             try:
-                record_load_failure(
-                    conn,
-                    state_schema,
-                    ingestion_run_id=ingestion_run_id,
-                    table_name=table_name,
-                    batch_id=batch_id,
-                    parquet_path=parquet_path,
-                    started_at=started_at,
-                    finished_at=finished_at,
-                    duration_seconds=duration,
-                    error_message=str(err),
-                    task_key=resolved_task_key,
-                )
+                recorded = False
+                if not is_conn_unusable(conn):
+                    try:
+                        record_load_failure(conn, state_schema, **fail_kwargs)
+                        recorded = True
+                    except Exception:
+                        pass
+                if not recorded:
+                    with open_db_connection() as err_conn:
+                        record_load_failure(err_conn, state_schema, **fail_kwargs)
             except Exception as state_err:
                 logger.warning("Không thể ghi lỗi vào bảng checkpoint %s.ingestion_checkpoints: %s", state_schema, state_err)
         raise
@@ -256,6 +269,7 @@ def load_parquet_to_postgres(
     auto_populate_raw_payload=None,
     skip_duplicate_batch=None,
     ensure_table=True,
+    suppress_transient_failure_log=False,
 ):
     path = Path(parquet_path)
     if not path.exists():
@@ -293,6 +307,7 @@ def load_parquet_to_postgres(
         auto_populate_raw_payload=auto_populate_raw_payload,
         skip_duplicate_batch=skip_duplicate_batch,
         ensure_table=ensure_table,
+        suppress_transient_failure_log=suppress_transient_failure_log,
     )
 
 

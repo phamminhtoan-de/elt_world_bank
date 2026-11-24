@@ -232,6 +232,7 @@ def load_settings(config_path=CONFIG_PATH):
         tgt_db_schema=tgt_db_schema,
         state_db_schema=state_db_schema,
         elt_load_mode=get_load_mode(pipeline_section),
+        elt_load_only=get_yaml_bool(pipeline_section, "load_only", False),
         elt_skip_duplicate_batch=get_yaml_bool(pipeline_section, "skip_duplicate_batch", True),
         elt_chunk_size=get_yaml_int(pipeline_section, "chunk_size", 5000, min_value=1),
         elt_auto_resume=get_yaml_bool(pipeline_section, "auto_resume", True),
@@ -241,6 +242,7 @@ def load_settings(config_path=CONFIG_PATH):
         ),
         elt_run_id=get_yaml_str(pipeline_section, "run_id", "") or None,
         save_raw_parquet=get_yaml_bool(pipeline_section, "save_raw_parquet", True),
+        db_max_retries=get_yaml_int(pipeline_section, "db_max_retries", 3, min_value=1),
         backfill_raw_payload_enabled=backfill_raw_payload_enabled,
         backfill_raw_payload_only_null=get_yaml_bool(raw_payload_backfill, "only_null", True),
         backfill_raw_payload_tables=get_yaml_str_list(

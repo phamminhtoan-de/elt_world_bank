@@ -97,6 +97,18 @@ def get_connection():
     )
 
 
+def is_transient_db_error(err):
+    return isinstance(err, (psycopg.OperationalError, psycopg.InterfaceError))
+
+
+def is_conn_unusable(conn):
+    return (
+        conn is None
+        or getattr(conn, "closed", False) is True
+        or getattr(conn, "broken", False) is True
+    )
+
+
 @contextmanager
 def open_db_connection():
     conn = get_connection()

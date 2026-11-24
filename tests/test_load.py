@@ -464,10 +464,60 @@ def test_ensure_table_flag_and_batch_ensure(tmp_path=None):
     ]
 
 
+def test_record_load_failure_falls_back_when_conn_closed():
+    dead_conn = make_fake_conn()
+
+    def broken_copy(q):
+        dead_conn.closed = True
+        raise RuntimeError("connection closed mid-copy")
+
+    dead_conn.cursor_obj.copy.side_effect = broken_copy
+    fallback_conn = make_fake_conn()
+    fallback_cm = MagicMock()
+    fallback_cm.__enter__.return_value = fallback_conn
+    fallback_cm.__exit__.return_value = False
+
+    with (
+        patch.object(load_module, "open_db_connection", return_value=fallback_cm),
+        patch.object(load_module, "record_load_failure") as mock_rec,
+    ):
+        assert_raises(
+            RuntimeError,
+            stream_chunks_to_postgres,
+            dead_conn,
+            table_name="raw_worldbank_indicators",
+            columns=("country_iso2", "indicator_code", "year", "value"),
+            chunks_iter=iter(
+                [
+                    pd.DataFrame(
+                        [
+                            {
+                                "country_iso2": "VN",
+                                "indicator_code": "NY.GDP.MKTP.CD",
+                                "year": 2024,
+                                "value": 1.0,
+                            }
+                        ]
+                    )
+                ]
+            ),
+            batch_id="b-dead",
+            schema="bronze",
+            load_mode="append",
+            state_schema="elt_metadata",
+            ingestion_run_id="r-dead",
+            ensure_table=False,
+        )
+
+    assert mock_rec.call_count == 1
+    assert mock_rec.call_args.args[0] is fallback_conn
+
+
 if __name__ == "__main__":
     test_serialize_chunks_and_batch_validation()
     test_load_parquet_modes_and_watermark()
     test_load_legacy_parquet_populates_raw_payload()
     test_append_skips_duplicate_batch_id()
     test_ensure_table_flag_and_batch_ensure()
+    test_record_load_failure_falls_back_when_conn_closed()
     print("LOAD TESTS PASSED")

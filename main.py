@@ -51,6 +51,11 @@ def parse_args():
         help="Chỉ chạy backfill cột raw_payload JSONB cho PostgreSQL theo cấu hình backfill.raw_payload trong src/pipeline.yml rồi kết thúc.",
     )
     parser.add_argument(
+        "--load-only",
+        action="store_true",
+        help="Chỉ chạy giai đoạn Load các file Parquet sẵn có trên đĩa vào PostgreSQL (không gọi API World Bank).",
+    )
+    parser.add_argument(
         "--run-id",
         default=None,
         help="Chỉ định ingestion_run_id cụ thể để resume từ checkpoint (ghi đè pipeline.run_id trong src/pipeline.yml).",
@@ -72,6 +77,8 @@ def parse_args():
 def main():
     args = parse_args()
     active_settings = load_settings(args.config) if args.config else settings
+    if args.backfill_payload and args.load_only:
+        raise ValueError("Không thể bật đồng thời --backfill-payload và --load-only.")
     if args.backfill_payload or active_settings.backfill_raw_payload_enabled:
         run_backfill_payload(schema=args.schema, cfg=active_settings)
         return
@@ -86,6 +93,7 @@ def main():
         run_id=args.run_id,
         source_id=args.source_id,
         max_indicators=args.max_indicators,
+        load_only=True if args.load_only else None,
         cfg=active_settings,
     )
 
