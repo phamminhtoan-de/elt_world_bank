@@ -7,10 +7,11 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
-
+from src.extract.parser import flatten_country_row
 from src.load import load as load_module
 from src.load.load import (
     discover_parquet_files,
+    load_parquet_files,
     load_parquet_to_postgres,
     serialize_dataframe_chunk,
     serialize_records_chunk,
@@ -123,6 +124,82 @@ def test_load_parquet_modes_and_watermark(tmp_path=None):
     assert len(wm_calls) == 1
     assert wm_calls[0]["last_loaded_year"] == 2024
     assert wm_calls[0]["api_last_updated"] == "2026-11-11"
+
+    empty_info = write_records_to_parquet(
+        "raw_worldbank_indicators",
+        iter([]),
+        output_dir=target_dir / "empty_wm",
+        chunk_size=2,
+        batch_id="batch-empty",
+        source_endpoint="https://api.worldbank.org/v2/country/all/indicator/NY.GDP.MKTP.CD",
+        ingestion_run_id="run-empty-wm",
+        file_stem="raw_worldbank_indicators__NY.GDP.MKTP.CD",
+        allow_empty=True,
+    )
+    empty_wm_calls = []
+    with (
+        patch.object(load_module, "update_load_checkpoint_in_cur", side_effect=lambda *a, **kw: None),
+        patch.object(
+            load_module,
+            "upsert_watermark_in_cur",
+            side_effect=lambda cur, state_schema, **kw: empty_wm_calls.append(kw),
+        ),
+    ):
+        load_parquet_to_postgres(
+            make_fake_conn(),
+            empty_info.path,
+            batch_id="batch-empty",
+            schema="bronze",
+            load_mode="append",
+            table_name="raw_worldbank_indicators",
+            chunk_size=2,
+            state_schema="elt_metadata",
+            ingestion_run_id="run-empty-wm",
+            task_key="raw_worldbank_indicators__NY.GDP.MKTP.CD",
+            indicator_code="NY.GDP.MKTP.CD",
+            watermark_year=2025,
+            api_last_updated="2026-11-11",
+        )
+    assert empty_wm_calls == []
+
+    null_year_info = write_records_to_parquet(
+        "raw_worldbank_indicators",
+        iter([make_indicator_record(None, 42.0)]),
+        output_dir=target_dir / "null_year_wm",
+        chunk_size=2,
+        batch_id="batch-null-year",
+        source_endpoint="https://api.worldbank.org/v2/country/all/indicator/NY.GDP.MKTP.CD",
+        ingestion_run_id="run-null-year-wm",
+        file_stem="raw_worldbank_indicators__NY.GDP.MKTP.CD",
+    )
+    null_year_wm_calls = []
+    with (
+        patch.object(load_module, "update_load_checkpoint_in_cur", side_effect=lambda *a, **kw: None),
+        patch.object(
+            load_module,
+            "upsert_watermark_in_cur",
+            side_effect=lambda cur, state_schema, **kw: null_year_wm_calls.append(kw),
+        ),
+    ):
+        loaded_null_year = load_parquet_to_postgres(
+            make_fake_conn(),
+            null_year_info.path,
+            batch_id="batch-null-year",
+            schema="bronze",
+            load_mode="append",
+            table_name="raw_worldbank_indicators",
+            chunk_size=2,
+            state_schema="elt_metadata",
+            ingestion_run_id="run-null-year-wm",
+            task_key="raw_worldbank_indicators__NY.GDP.MKTP.CD",
+            indicator_code="NY.GDP.MKTP.CD",
+            watermark_year=2025,
+            api_last_updated="2026-12-01",
+        )
+    assert loaded_null_year == 1
+    assert len(null_year_wm_calls) == 1
+    assert null_year_wm_calls[0]["last_loaded_year"] is None
+    assert null_year_wm_calls[0]["api_last_updated"] == "2026-11-11"
 
     assert_raises(
         ValueError,
@@ -303,9 +380,94 @@ def test_append_skips_duplicate_batch_id(tmp_path=None):
     assert len(force_conn.copied_queries) == 1
 
 
+def test_ensure_table_flag_and_batch_ensure(tmp_path=None):
+    target_dir = resolve_dir(tmp_path) / "ensure_flag"
+
+    no_ensure_conn = make_fake_conn()
+    loaded = stream_chunks_to_postgres(
+        no_ensure_conn,
+        table_name="raw_worldbank_indicators",
+        columns=("country_iso2", "indicator_code", "year", "value"),
+        chunks_iter=iter(
+            [
+                pd.DataFrame(
+                    [
+                        {
+                            "country_iso2": "VN",
+                            "indicator_code": "NY.GDP.MKTP.CD",
+                            "year": 2024,
+                            "value": 100.0,
+                        }
+                    ]
+                )
+            ]
+        ),
+        batch_id="batch-no-ensure",
+        schema="bronze",
+        load_mode="append",
+        ensure_table=False,
+    )
+    assert loaded == 1
+    no_ensure_sql = "\n".join(q for q, _ in no_ensure_conn.executed_queries)
+    assert "CREATE TABLE IF NOT EXISTS" not in no_ensure_sql
+    assert "ALTER TABLE" not in no_ensure_sql
+    assert "CREATE INDEX" not in no_ensure_sql
+    assert "information_schema.columns" not in no_ensure_sql
+
+    ind_1 = write_records_to_parquet(
+        "raw_worldbank_indicators",
+        iter([make_indicator_record(2024, 10.0, code="NY.GDP.MKTP.CD")]),
+        output_dir=target_dir,
+        chunk_size=10,
+        batch_id="batch-multi-1",
+        file_stem="raw_worldbank_indicators__NY.GDP.MKTP.CD",
+    )
+    ind_2 = write_records_to_parquet(
+        "raw_worldbank_indicators",
+        iter([make_indicator_record(2024, 20.0, code="FP.CPI.TOTL.ZG")]),
+        output_dir=target_dir,
+        chunk_size=10,
+        batch_id="batch-multi-2",
+        file_stem="raw_worldbank_indicators__FP.CPI.TOTL.ZG",
+    )
+    country_file = write_records_to_parquet(
+        "raw_worldbank_countries",
+        iter([flatten_country_row({"id": "VNM", "iso2Code": "VN", "name": "Viet Nam"})]),
+        output_dir=target_dir,
+        chunk_size=10,
+        batch_id="batch-country-1",
+        file_stem="raw_worldbank_countries",
+    )
+
+    batch_conn = make_fake_conn()
+    conn_cm = MagicMock()
+    conn_cm.__enter__.return_value = batch_conn
+    conn_cm.__exit__.return_value = False
+
+    with (
+        patch.object(load_module, "open_db_connection", return_value=conn_cm),
+        patch.object(load_module, "ensure_raw_table", wraps=load_module.ensure_raw_table) as mock_ensure,
+    ):
+        counts = load_parquet_files(
+            [ind_1.path, ind_2.path, country_file.path],
+            batch_id="batch-fallback",
+            schema="bronze",
+            load_mode="append",
+            chunk_size=10,
+        )
+
+    assert counts == {"raw_worldbank_indicators": 2, "raw_worldbank_countries": 1}
+    assert mock_ensure.call_count == 2
+    assert [c.args[2] for c in mock_ensure.call_args_list] == [
+        "raw_worldbank_indicators",
+        "raw_worldbank_countries",
+    ]
+
+
 if __name__ == "__main__":
     test_serialize_chunks_and_batch_validation()
     test_load_parquet_modes_and_watermark()
     test_load_legacy_parquet_populates_raw_payload()
     test_append_skips_duplicate_batch_id()
+    test_ensure_table_flag_and_batch_ensure()
     print("LOAD TESTS PASSED")

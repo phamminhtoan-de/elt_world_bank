@@ -1,10 +1,12 @@
 from pathlib import Path
 import sys
 from unittest.mock import MagicMock, patch
-
 from src.storage import database as db_module
 from src.storage.database import (
+    INGESTION_META_DDL_COLUMNS,
+    OBSOLETE_INDEXES,
     TABLE_DDL_COLUMNS,
+    TABLE_INDEXES,
     TABLE_PRIMARY_KEYS,
     backfill_missing_raw_payloads,
     ensure_raw_table,
@@ -26,6 +28,23 @@ def test_database_ddl_and_connection_lifecycle():
         "indicator_code",
         "year",
     )
+    assert TABLE_INDEXES == {
+        "raw_worldbank_indicators": (
+            ("idx_raw_worldbank_indicators_batch_id_indicator_code", ("batch_id", "indicator_code")),
+        ),
+        "raw_worldbank_countries": (
+            ("idx_raw_worldbank_countries_batch_id", ("batch_id",)),
+        ),
+        "raw_worldbank_indicator_metadata": (
+            ("idx_raw_worldbank_indicator_metadata_batch_id", ("batch_id",)),
+        ),
+    }
+    assert OBSOLETE_INDEXES == {
+        "raw_worldbank_indicators": (
+            "idx_raw_worldbank_indicators_batch_id",
+            "idx_raw_worldbank_indicators_indicator_code",
+        ),
+    }
 
     ref_text = repr(table_ref("bronze", "raw_worldbank_indicators"))
     assert "bronze" in ref_text
@@ -39,11 +58,39 @@ def test_database_ddl_and_connection_lifecycle():
     executed_sql = "\n".join(q for q, _ in conn.executed_queries)
     assert "CREATE SCHEMA IF NOT EXISTS" in executed_sql
     assert "CREATE TABLE IF NOT EXISTS" in executed_sql
+    assert "information_schema.columns" in executed_sql
     assert "ADD COLUMN IF NOT EXISTS" in executed_sql
+    assert "DROP INDEX IF EXISTS" in executed_sql
+    assert "idx_raw_worldbank_indicators_batch_id" in executed_sql
+    assert "idx_raw_worldbank_indicators_indicator_code" in executed_sql
     assert "CREATE INDEX IF NOT EXISTS" in executed_sql
+    assert "idx_raw_worldbank_indicators_batch_id_indicator_code" in executed_sql
     assert "raw_payload" in executed_sql
     assert "JSONB" in executed_sql
     assert "ingested_at" in executed_sql
+
+    ready_conn = make_fake_conn()
+    ready_conn.cursor_obj.fetchall.return_value = [(c,) for c, _ in INGESTION_META_DDL_COLUMNS]
+    with ready_conn.cursor() as cur:
+        ensure_raw_table(cur, "bronze", "raw_worldbank_indicators")
+
+    ready_sql = "\n".join(q for q, _ in ready_conn.executed_queries)
+    assert "information_schema.columns" in ready_sql
+    assert "ALTER TABLE" not in ready_sql
+    assert "idx_raw_worldbank_indicators_batch_id_indicator_code" in ready_sql
+
+    for dim_table, dim_idx in (
+        ("raw_worldbank_countries", "idx_raw_worldbank_countries_batch_id"),
+        ("raw_worldbank_indicator_metadata", "idx_raw_worldbank_indicator_metadata_batch_id"),
+    ):
+        dim_conn = make_fake_conn()
+        dim_conn.cursor_obj.fetchall.return_value = [(c,) for c, _ in INGESTION_META_DDL_COLUMNS]
+        with dim_conn.cursor() as cur:
+            ensure_raw_table(cur, "bronze", dim_table)
+        dim_sql = "\n".join(q for q, _ in dim_conn.executed_queries)
+        assert "ALTER TABLE" not in dim_sql
+        assert "DROP INDEX IF EXISTS" not in dim_sql
+        assert dim_idx in dim_sql
 
     assert_raises(ValueError, ensure_raw_table, MagicMock(), "bronze", "bang_khong_ton_tai")
 

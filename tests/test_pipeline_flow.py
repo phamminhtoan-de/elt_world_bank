@@ -1,9 +1,10 @@
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 from unittest.mock import patch
-
 from main import run_ingestion
+from src.config.settings import settings
 from src.extract.parser import flatten_country_row, flatten_indicator_meta_row
 from src.load import load as load_module
 from src.pipeline import recovery as recovery_module
@@ -386,9 +387,69 @@ def test_recover_metadata_from_file_ready_parquet(tmp_path=None):
     assert harness["state_db"]["runs"]["run-1"]["status"] == "SUCCESS"
 
 
+def test_load_stage_ensures_tables_once_and_parquet_cleanup(tmp_path=None):
+    target_dir = resolve_dir(tmp_path) / "ensure_and_cleanup"
+    cfg_no_save = SimpleNamespace(**vars(settings))
+    cfg_no_save.save_raw_parquet = False
+
+    harness = make_pipeline_harness()
+    with harness["patched_env"]():
+        with (
+            patch.object(runner_module, "ensure_raw_table") as mock_runner_ensure,
+            patch.object(load_module, "ensure_raw_table") as mock_load_ensure,
+        ):
+            results = run_ingestion(
+                data_dir=target_dir,
+                load_mode="append",
+                chunk_size=2,
+                indicators=("NY.GDP.MKTP.CD", "FP.CPI.TOTL.ZG"),
+                cfg=cfg_no_save,
+            )
+
+    assert results == {
+        "raw_worldbank_countries": 1,
+        "raw_worldbank_indicator_metadata": 2,
+        "raw_worldbank_indicators": 2,
+    }
+    assert mock_runner_ensure.call_count == 3
+    assert [c.args[2] for c in mock_runner_ensure.call_args_list] == [
+        "raw_worldbank_countries",
+        "raw_worldbank_indicator_metadata",
+        "raw_worldbank_indicators",
+    ]
+    assert mock_load_ensure.call_count == 0
+    assert list(target_dir.glob("*.parquet")) == []
+
+    fail_dir = resolve_dir(tmp_path) / "cleanup_keeps_failed"
+    fail_harness = make_pipeline_harness()
+    real_load_fn = load_module.load_parquet_to_postgres
+
+    def load_fail_on_indicator(conn, parquet_path, **kwargs):
+        if kwargs.get("table_name") == "raw_worldbank_indicators":
+            raise RuntimeError("Simulated load failure")
+        return real_load_fn(conn, parquet_path, **kwargs)
+
+    with fail_harness["patched_env"]():
+        with patch.object(runner_module, "load_parquet_to_postgres", side_effect=load_fail_on_indicator):
+            assert_raises(
+                RuntimeError,
+                run_ingestion,
+                data_dir=fail_dir,
+                load_mode="append",
+                chunk_size=2,
+                indicators=("NY.GDP.MKTP.CD",),
+                cfg=cfg_no_save,
+            )
+
+    assert not (fail_dir / "raw_worldbank_countries.parquet").exists()
+    assert not (fail_dir / "raw_worldbank_indicator_metadata.parquet").exists()
+    assert (fail_dir / "raw_worldbank_indicators__NY.GDP.MKTP.CD.parquet").exists()
+
+
 if __name__ == "__main__":
     test_checkpoint_and_auto_resume()
     test_incremental_new_indicators_and_fresh()
     test_corrupt_parquet_auto_reextract()
     test_recover_metadata_from_file_ready_parquet()
+    test_load_stage_ensures_tables_once_and_parquet_cleanup()
     print("PIPELINE FLOW TESTS PASSED")

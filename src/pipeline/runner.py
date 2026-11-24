@@ -24,7 +24,12 @@ from src.pipeline.recovery import (
     record_extract_metadata_with_retry,
     try_recover_extracted_parquet,
 )
-from src.storage.database import backfill_missing_raw_payloads, ensure_schema, open_db_connection
+from src.storage.database import (
+    backfill_missing_raw_payloads,
+    ensure_raw_table,
+    ensure_schema,
+    open_db_connection,
+)
 from src.storage.parquet_io import cleanup_stale_temp_parquet_files
 
 logger = get_logger("elt.pipeline")
@@ -196,11 +201,20 @@ def run_load_stage(
     active_settings,
 ):
     results = {}
+    tables_to_ensure = tuple(
+        dict.fromkeys(
+            table_name
+            for task_key, table_name, _, _ in effective_task_specs
+            if checkpoints[task_key].get("load_status") != "LOADED"
+        )
+    )
     with log_step(logger, "Giai đoạn 2/2: Load streaming từ Parquet -> PostgreSQL Bronze (Atomic)"):
         with open_db_connection() as conn:
             with conn.transaction():
                 with conn.cursor() as cur:
                     ensure_schema(cur, target_schema)
+                    for table_name in tables_to_ensure:
+                        ensure_raw_table(cur, target_schema, table_name)
 
             for task_key, table_name, indicator_code, _ in effective_task_specs:
                 cp = checkpoints[task_key]
@@ -237,7 +251,14 @@ def run_load_stage(
                         api_last_updated=current_api_updated,
                         auto_populate_raw_payload=active_settings.backfill_parquet_auto_populate_raw_payload,
                         skip_duplicate_batch=active_settings.elt_skip_duplicate_batch,
+                        ensure_table=False,
                     )
+                if not active_settings.save_raw_parquet:
+                    try:
+                        parquet_path.unlink(missing_ok=True)
+                        logger.info("[CLEANUP] Đã xóa file Parquet sau khi commit: %s", parquet_path.name)
+                    except OSError as err:
+                        logger.warning("Không thể xóa file Parquet '%s': %s", parquet_path, err)
                 results[table_name] = results.get(table_name, 0) + rows_loaded
 
             finish_run(

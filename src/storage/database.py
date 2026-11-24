@@ -63,6 +63,25 @@ INGESTION_META_DDL_COLUMNS = (
     ("ingested_at", "TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP"),
 )
 
+TABLE_INDEXES = {
+    "raw_worldbank_indicators": (
+        ("idx_raw_worldbank_indicators_batch_id_indicator_code", ("batch_id", "indicator_code")),
+    ),
+    "raw_worldbank_countries": (
+        ("idx_raw_worldbank_countries_batch_id", ("batch_id",)),
+    ),
+    "raw_worldbank_indicator_metadata": (
+        ("idx_raw_worldbank_indicator_metadata_batch_id", ("batch_id",)),
+    ),
+}
+
+OBSOLETE_INDEXES = {
+    "raw_worldbank_indicators": (
+        "idx_raw_worldbank_indicators_batch_id",
+        "idx_raw_worldbank_indicators_indicator_code",
+    ),
+}
+
 
 def table_ref(schema, table_name):
     return sql.SQL("{}.{}").format(sql.Identifier(schema), sql.Identifier(table_name))
@@ -100,18 +119,31 @@ def ensure_raw_table(cur, schema, table_name):
     column_defs = [sql.SQL("{} {}").format(sql.Identifier(c), sql.SQL(t)) for c, t in all_cols]
     cur.execute(sql.SQL("CREATE TABLE IF NOT EXISTS {} ({})").format(target_ref, sql.SQL(", ").join(column_defs)))
 
-    alter_clauses = [
-        sql.SQL("ADD COLUMN IF NOT EXISTS {} {}").format(sql.Identifier(c), sql.SQL(t))
-        for c, t in INGESTION_META_DDL_COLUMNS
-    ]
-    cur.execute(sql.SQL("ALTER TABLE {} {}").format(target_ref, sql.SQL(", ").join(alter_clauses)))
-
-    idx_name = f"idx_{table_name}_batch_id"
     cur.execute(
-        sql.SQL("CREATE INDEX IF NOT EXISTS {} ON {} (batch_id)").format(
-            sql.Identifier(idx_name), target_ref
-        )
+        "SELECT column_name FROM information_schema.columns WHERE table_schema = %s AND table_name = %s",
+        (schema, table_name),
     )
+    existing_cols = {row[0] for row in cur.fetchall()}
+    missing_meta_cols = [
+        (c, t) for c, t in INGESTION_META_DDL_COLUMNS if c not in existing_cols
+    ]
+    if missing_meta_cols:
+        alter_clauses = [
+            sql.SQL("ADD COLUMN IF NOT EXISTS {} {}").format(sql.Identifier(c), sql.SQL(t))
+            for c, t in missing_meta_cols
+        ]
+        cur.execute(sql.SQL("ALTER TABLE {} {}").format(target_ref, sql.SQL(", ").join(alter_clauses)))
+
+    for obsolete_idx in OBSOLETE_INDEXES.get(table_name, ()):
+        cur.execute(sql.SQL("DROP INDEX IF EXISTS {}").format(table_ref(schema, obsolete_idx)))
+
+    for idx_name, idx_cols in TABLE_INDEXES.get(table_name, ()):
+        cols_sql = sql.SQL(", ").join(sql.Identifier(c) for c in idx_cols)
+        cur.execute(
+            sql.SQL("CREATE INDEX IF NOT EXISTS {} ON {} ({})").format(
+                sql.Identifier(idx_name), target_ref, cols_sql
+            )
+        )
 
 
 BACKFILL_EXCLUDED_META_COLUMNS = tuple(col for col, _ in INGESTION_META_DDL_COLUMNS)

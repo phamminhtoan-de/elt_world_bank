@@ -80,6 +80,7 @@ def stream_chunks_to_postgres(
     api_last_updated=None,
     auto_populate_raw_payload=None,
     skip_duplicate_batch=None,
+    ensure_table=True,
 ):
     if load_mode not in VALID_LOAD_MODES:
         raise ValueError(f"load_mode không hợp lệ: '{load_mode}'. Chỉ chấp nhận {sorted(VALID_LOAD_MODES)}.")
@@ -117,7 +118,8 @@ def stream_chunks_to_postgres(
     try:
         with conn.transaction():
             with conn.cursor() as cur:
-                ensure_raw_table(cur, schema, table_name)
+                if ensure_table:
+                    ensure_raw_table(cur, schema, table_name)
                 if (
                     load_mode == "append"
                     and should_skip_duplicate
@@ -262,6 +264,7 @@ def load_parquet_to_postgres(
     api_last_updated=None,
     auto_populate_raw_payload=None,
     skip_duplicate_batch=None,
+    ensure_table=True,
 ):
     path = Path(parquet_path)
     if not path.exists():
@@ -298,6 +301,7 @@ def load_parquet_to_postgres(
         api_last_updated=api_last_updated,
         auto_populate_raw_payload=auto_populate_raw_payload,
         skip_duplicate_batch=skip_duplicate_batch,
+        ensure_table=ensure_table,
     )
 
 
@@ -329,6 +333,7 @@ def load_parquet_files(
         raise ValueError(f"load_mode không hợp lệ: '{effective_mode}'. Chỉ chấp nhận {sorted(VALID_LOAD_MODES)}.")
 
     paths = [Path(p) for p in parquet_paths] if parquet_paths is not None else discover_parquet_files()
+    unique_tables = tuple(dict.fromkeys(path.stem.split("__", 1)[0] for path in paths))
     loaded_counts = {}
 
     with log_step(logger, f"Kết nối PostgreSQL ({settings.db_dsn_safe})"):
@@ -337,6 +342,8 @@ def load_parquet_files(
                 with conn.transaction():
                     with conn.cursor() as cur:
                         ensure_schema(cur, target_schema)
+                        for table_name in unique_tables:
+                            ensure_raw_table(cur, target_schema, table_name)
 
             for path in paths:
                 parts = path.stem.split("__", 1)
@@ -355,6 +362,7 @@ def load_parquet_files(
                         ingestion_run_id=ingestion_run_id,
                         task_key=path.stem,
                         indicator_code=indicator_code,
+                        ensure_table=False,
                     )
                 loaded_counts[table_name] = loaded_counts.get(table_name, 0) + rows_loaded
 
