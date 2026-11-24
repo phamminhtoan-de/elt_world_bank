@@ -143,11 +143,16 @@ def test_fetch_source_indicators_and_last_updated():
     ]
 
     with patch.object(api_module, "iter_all_pages", side_effect=lambda *a, **kw: iter(sample_source_rows)):
-        assert fetch_source_indicators(MagicMock(), source_id="2", max_indicators=3) == (
+        cached_meta = {}
+        assert fetch_source_indicators(
+            MagicMock(), source_id="2", max_indicators=3, metadata_cache=cached_meta
+        ) == (
             "NY.GDP.MKTP.CD",
             "SP.POP.TOTL",
             "AG.CON.FERT.PT.ZS",
         )
+        assert set(cached_meta.keys()) == {"NY.GDP.MKTP.CD", "SP.POP.TOTL", "AG.CON.FERT.PT.ZS"}
+        assert cached_meta["NY.GDP.MKTP.CD"]["name"] == "GDP (current US$)"
         assert fetch_source_indicators(MagicMock(), source_id="2", max_indicators=0) == (
             "NY.GDP.MKTP.CD",
             "SP.POP.TOTL",

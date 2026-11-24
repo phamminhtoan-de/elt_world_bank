@@ -418,6 +418,7 @@ def test_load_stage_ensures_tables_once_and_parquet_cleanup(tmp_path=None):
         "raw_worldbank_indicators",
     ]
     assert mock_load_ensure.call_count == 0
+    assert len(harness["opened_conns"]) == 3
     assert list(target_dir.glob("*.parquet")) == []
 
     fail_dir = resolve_dir(tmp_path) / "cleanup_keeps_failed"

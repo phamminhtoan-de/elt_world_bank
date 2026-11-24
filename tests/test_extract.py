@@ -48,6 +48,24 @@ def test_get_ingestion_tasks_and_bulk_metadata():
     ]
     assert list(iter_indicator_metadata(MagicMock(), ())) == []
 
+    prefetched = {
+        "NY.GDP.MKTP.CD": {"id": "NY.GDP.MKTP.CD", "name": "GDP cached"},
+        "SP.POP.TOTL": {"id": "SP.POP.TOTL", "name": "Population cached"},
+    }
+    with patch.object(extract_module, "iter_all_pages", side_effect=AssertionError("Không được gọi lại API")):
+        cached_rows = list(
+            iter_indicator_metadata(
+                MagicMock(),
+                ("NY.GDP.MKTP.CD", "SP.POP.TOTL"),
+                source_id="2",
+                prefetched_metadata=prefetched,
+            )
+        )
+    assert [(r["indicator_code"], r["indicator_name"]) for r in cached_rows] == [
+        ("NY.GDP.MKTP.CD", "GDP cached"),
+        ("SP.POP.TOTL", "Population cached"),
+    ]
+
 
 def test_extract_task_to_parquet_and_validation(tmp_path=None):
     target_dir = resolve_dir(tmp_path)

@@ -86,12 +86,15 @@ def create_or_resume_run(
                     (resolved_run_id, "RUNNING", load_mode, target_schema, str(run_data_dir), chunk_size, now),
                 )
 
-            for task_key, table_name, indicator_code, source_endpoint in normalized_specs:
-                cur.execute(
+            if normalized_specs:
+                cur.executemany(
                     sql.SQL(
                         "INSERT INTO {} (ingestion_run_id, task_key, table_name, indicator_code, batch_id, source_endpoint) VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (ingestion_run_id, task_key) DO NOTHING"
                     ).format(cp_ref),
-                    (resolved_run_id, task_key, table_name, indicator_code, str(uuid.uuid4()), source_endpoint),
+                    [
+                        (resolved_run_id, task_key, table_name, indicator_code, str(uuid.uuid4()), source_endpoint)
+                        for task_key, table_name, indicator_code, source_endpoint in normalized_specs
+                    ],
                 )
 
             select_cols = sql.SQL(", ").join(sql.Identifier(col) for col in CHECKPOINT_COLUMNS)

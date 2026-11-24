@@ -89,6 +89,7 @@ def iter_indicator_metadata(
     extracted_at=None,
     progress=None,
     source_id=None,
+    prefetched_metadata=None,
 ):
     target_codes = list(dict.fromkeys(indicators))
     if not target_codes:
@@ -100,25 +101,42 @@ def iter_indicator_metadata(
     yielded = set()
     bulk_url = f"{settings.world_bank_api_url}/source/{resolved_source}/indicator"
 
-    for _, row in iter_all_pages(
-        session,
-        bulk_url,
-        {},
-        f"metadata:source:{resolved_source}",
-        progress=progress,
-        checkpoint_key=f"source:{resolved_source}",
-    ):
-        code = (row.get("id") or "").strip()
-        if code in target_set and code not in yielded:
-            yielded.add(code)
-            yield flatten_indicator_meta_row(
-                row,
-                code,
-                extracted_at=ts,
-                batch_id=batch_id,
-                source_endpoint=bulk_url,
-                ingestion_run_id=ingestion_run_id,
-            )
+    if prefetched_metadata:
+        for code in target_codes:
+            if code in prefetched_metadata and code not in yielded:
+                yielded.add(code)
+                yield flatten_indicator_meta_row(
+                    prefetched_metadata[code],
+                    code,
+                    extracted_at=ts,
+                    batch_id=batch_id,
+                    source_endpoint=bulk_url,
+                    ingestion_run_id=ingestion_run_id,
+                )
+        if yielded and progress is not None:
+            progress["last_page"] = 1
+            progress["last_key"] = f"source:{resolved_source}"
+
+    if len(yielded) < len(target_set):
+        for _, row in iter_all_pages(
+            session,
+            bulk_url,
+            {},
+            f"metadata:source:{resolved_source}",
+            progress=progress,
+            checkpoint_key=f"source:{resolved_source}",
+        ):
+            code = (row.get("id") or "").strip()
+            if code in target_set and code not in yielded:
+                yielded.add(code)
+                yield flatten_indicator_meta_row(
+                    row,
+                    code,
+                    extracted_at=ts,
+                    batch_id=batch_id,
+                    source_endpoint=bulk_url,
+                    ingestion_run_id=ingestion_run_id,
+                )
 
     missing_codes = [code for code in target_codes if code not in yielded]
     for idx, code in enumerate(missing_codes, start=1):
@@ -219,6 +237,7 @@ def extract_task_to_parquet(
     source_id=None,
     allow_empty=None,
     date_range=None,
+    prefetched_metadata=None,
 ):
     ts = extracted_at or datetime.now(timezone.utc).isoformat()
     progress = {"last_page": 0, "last_key": ""}
@@ -244,6 +263,7 @@ def extract_task_to_parquet(
             extracted_at=ts,
             progress=progress,
             source_id=resolved_source,
+            prefetched_metadata=prefetched_metadata,
         )
     elif table_name == "raw_worldbank_indicators":
         targets = (indicator_code,) if indicator_code else indicators

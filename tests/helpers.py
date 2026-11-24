@@ -25,6 +25,7 @@ def make_fake_conn():
 
     cur = MagicMock()
     cur.execute.side_effect = lambda q, p=None: conn.executed_queries.append((repr(q), p))
+    cur.executemany.side_effect = lambda q, seq: conn.executed_queries.extend((repr(q), p) for p in seq)
 
     @contextmanager
     def fake_copy(q):

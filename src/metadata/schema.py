@@ -89,23 +89,6 @@ def ensure_state_schema(conn, state_schema):
             )
             cur.execute(
                 sql.SQL(
-                    "ALTER TABLE {} ADD COLUMN IF NOT EXISTS task_key VARCHAR(150), ADD COLUMN IF NOT EXISTS indicator_code VARCHAR(50)"
-                ).format(cp_ref)
-            )
-            cur.execute(sql.SQL("UPDATE {} SET task_key = table_name WHERE task_key IS NULL").format(cp_ref))
-            cur.execute(sql.SQL("ALTER TABLE {} ALTER COLUMN task_key SET NOT NULL").format(cp_ref))
-            cur.execute(
-                sql.SQL(
-                    "ALTER TABLE {} DROP CONSTRAINT IF EXISTS ingestion_checkpoints_ingestion_run_id_table_name_key"
-                ).format(cp_ref)
-            )
-            cur.execute(
-                sql.SQL(
-                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_ingestion_checkpoints_run_task ON {} (ingestion_run_id, task_key)"
-                ).format(cp_ref)
-            )
-            cur.execute(
-                sql.SQL(
                     """
                     CREATE TABLE IF NOT EXISTS {} (
                         id               BIGSERIAL PRIMARY KEY,
@@ -125,7 +108,6 @@ def ensure_state_schema(conn, state_schema):
                     """
                 ).format(logs_ref)
             )
-            cur.execute(sql.SQL("ALTER TABLE {} ADD COLUMN IF NOT EXISTS task_key VARCHAR(150)").format(logs_ref))
             cur.execute(
                 sql.SQL(
                     """
@@ -143,3 +125,31 @@ def ensure_state_schema(conn, state_schema):
                     """
                 ).format(wm_ref)
             )
+            cur.execute(
+                "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = %s AND table_name IN (%s, %s)",
+                (state_schema, CHECKPOINTS_TABLE, STEP_LOGS_TABLE),
+            )
+            existing_cols = {(row[0], row[1]) for row in cur.fetchall()}
+            if (CHECKPOINTS_TABLE, "task_key") not in existing_cols or (
+                CHECKPOINTS_TABLE,
+                "indicator_code",
+            ) not in existing_cols:
+                cur.execute(
+                    sql.SQL(
+                        "ALTER TABLE {} ADD COLUMN IF NOT EXISTS task_key VARCHAR(150), ADD COLUMN IF NOT EXISTS indicator_code VARCHAR(50)"
+                    ).format(cp_ref)
+                )
+                cur.execute(sql.SQL("UPDATE {} SET task_key = table_name WHERE task_key IS NULL").format(cp_ref))
+                cur.execute(sql.SQL("ALTER TABLE {} ALTER COLUMN task_key SET NOT NULL").format(cp_ref))
+                cur.execute(
+                    sql.SQL(
+                        "ALTER TABLE {} DROP CONSTRAINT IF EXISTS ingestion_checkpoints_ingestion_run_id_table_name_key"
+                    ).format(cp_ref)
+                )
+                cur.execute(
+                    sql.SQL(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS idx_ingestion_checkpoints_run_task ON {} (ingestion_run_id, task_key)"
+                    ).format(cp_ref)
+                )
+            if (STEP_LOGS_TABLE, "task_key") not in existing_cols:
+                cur.execute(sql.SQL("ALTER TABLE {} ADD COLUMN IF NOT EXISTS task_key VARCHAR(150)").format(logs_ref))

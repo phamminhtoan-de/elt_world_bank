@@ -147,7 +147,7 @@ def iter_all_pages(session, url, base_params, label, progress=None, checkpoint_k
             time.sleep(settings.world_bank_sleep_seconds)
 
 
-def fetch_source_indicators(session, source_id=None, max_indicators=None):
+def fetch_source_indicators(session, source_id=None, max_indicators=None, *, metadata_cache=None):
     resolved_source = str(source_id or settings.world_bank_source_id).strip() or "2"
     resolved_limit = (
         settings.world_bank_max_indicators if max_indicators is None else int(max_indicators)
@@ -158,11 +158,13 @@ def fetch_source_indicators(session, source_id=None, max_indicators=None):
     url = f"{settings.world_bank_api_url}/source/{resolved_source}/indicator"
     discovered = []
     seen = set()
+    rows_by_code = {}
     for _, row in iter_all_pages(session, url, {}, f"source:{resolved_source}:indicators"):
         code = (row.get("id") or "").strip()
         if code and code not in seen:
             seen.add(code)
             discovered.append(code)
+            rows_by_code[code] = row
 
     if not discovered:
         raise RuntimeError(f"Không tìm thấy chỉ số nào từ endpoint {url}.")
@@ -176,6 +178,10 @@ def fetch_source_indicators(session, source_id=None, max_indicators=None):
 
     if resolved_limit > 0:
         ordered = ordered[:resolved_limit]
+
+    if metadata_cache is not None:
+        for code in ordered:
+            metadata_cache[code] = rows_by_code[code]
 
     logger.info(
         "Đã chọn %d/%d chỉ số từ World Bank source=%s.",

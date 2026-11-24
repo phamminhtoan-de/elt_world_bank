@@ -57,15 +57,29 @@ def run_backfill_payload(*, schema=None, cfg=None):
     return results
 
 
-def discover_indicators_and_last_updated(indicators, source_id, max_indicators):
+def discover_indicators_and_last_updated(
+    indicators,
+    source_id,
+    max_indicators,
+    *,
+    metadata_cache=None,
+):
     with requests.Session() as session:
         if indicators is not None:
             resolved_indicators = tuple(indicators)
         else:
             with log_step(logger, f"Lấy danh sách chỉ số từ World Bank (source={source_id})"):
-                resolved_indicators = fetch_source_indicators(
-                    session, source_id=source_id, max_indicators=max_indicators
-                )
+                try:
+                    resolved_indicators = fetch_source_indicators(
+                        session,
+                        source_id=source_id,
+                        max_indicators=max_indicators,
+                        metadata_cache=metadata_cache,
+                    )
+                except TypeError:
+                    resolved_indicators = fetch_source_indicators(
+                        session, source_id=source_id, max_indicators=max_indicators
+                    )
 
         try:
             current_api_updated = fetch_source_last_updated(session, source_id=source_id)
@@ -90,11 +104,12 @@ def run_extract_stage(
     ingestion_run_id,
     resolved_indicators,
     effective_source_id,
+    prefetched_metadata=None,
 ):
     parquet_paths = {}
     with log_step(logger, "Giai đoạn 1/2: Extract streaming từ API -> Parquet (Checkpoint)"):
         cleanup_stale_temp_parquet_files(run_data_dir)
-        with requests.Session() as session:
+        with requests.Session() as session, open_db_connection() as state_conn:
             for task_key, table_name, indicator_code, endpoint in effective_task_specs:
                 cp = checkpoints[task_key]
                 recovered_path = try_recover_extracted_parquet(
@@ -105,6 +120,7 @@ def run_extract_stage(
                     run_data_dir,
                     effective_state_schema,
                     ingestion_run_id,
+                    conn=state_conn,
                 )
                 if recovered_path is not None:
                     parquet_paths[task_key] = recovered_path
@@ -115,44 +131,51 @@ def run_extract_stage(
                 task_date_range = task_overrides.get(task_key, {}).get("date_range")
                 try:
                     with log_step(logger, f"Extract & ghi Parquet: {task_key}"):
+                        extract_kwargs = {
+                            "output_dir": run_data_dir,
+                            "chunk_size": effective_chunk_size,
+                            "batch_id": cp["batch_id"],
+                            "ingestion_run_id": ingestion_run_id,
+                            "extracted_at": started_at.isoformat(),
+                            "indicators": resolved_indicators,
+                            "source_id": effective_source_id,
+                            "date_range": task_date_range,
+                        }
+                        if table_name == "raw_worldbank_indicator_metadata" and prefetched_metadata:
+                            extract_kwargs["prefetched_metadata"] = prefetched_metadata
                         info = extract_task_to_parquet(
                             session,
                             task_key,
                             table_name,
                             indicator_code,
-                            output_dir=run_data_dir,
-                            chunk_size=effective_chunk_size,
-                            batch_id=cp["batch_id"],
-                            ingestion_run_id=ingestion_run_id,
-                            extracted_at=started_at.isoformat(),
-                            indicators=resolved_indicators,
-                            source_id=effective_source_id,
-                            date_range=task_date_range,
+                            **extract_kwargs,
                         )
                 except Exception as err:
                     finished_at = datetime.now(timezone.utc)
                     duration = time.perf_counter() - start_perf
+                    fail_kwargs = {
+                        "ingestion_run_id": ingestion_run_id,
+                        "table_name": table_name,
+                        "batch_id": cp["batch_id"],
+                        "source_endpoint": endpoint,
+                        "parquet_path": None,
+                        "rows_extracted": 0,
+                        "last_extracted_page": 0,
+                        "last_checkpoint_key": None,
+                        "extracted_at": started_at,
+                        "started_at": started_at,
+                        "finished_at": finished_at,
+                        "duration_seconds": duration,
+                        "status": "FAILED",
+                        "error_message": str(err),
+                        "task_key": task_key,
+                    }
                     try:
-                        with open_db_connection() as conn:
-                            save_extract_checkpoint(
-                                conn,
-                                effective_state_schema,
-                                ingestion_run_id=ingestion_run_id,
-                                table_name=table_name,
-                                batch_id=cp["batch_id"],
-                                source_endpoint=endpoint,
-                                parquet_path=None,
-                                rows_extracted=0,
-                                last_extracted_page=0,
-                                last_checkpoint_key=None,
-                                extracted_at=started_at,
-                                started_at=started_at,
-                                finished_at=finished_at,
-                                duration_seconds=duration,
-                                status="FAILED",
-                                error_message=str(err),
-                                task_key=task_key,
-                            )
+                        if not getattr(state_conn, "closed", False):
+                            save_extract_checkpoint(state_conn, effective_state_schema, **fail_kwargs)
+                        else:
+                            with open_db_connection() as err_conn:
+                                save_extract_checkpoint(err_conn, effective_state_schema, **fail_kwargs)
                     except Exception as state_err:
                         logger.warning(
                             "Không thể lưu trạng thái lỗi EXTRACT cho %s: %s",
@@ -174,6 +197,7 @@ def run_extract_stage(
                     finished_at=finished_at,
                     duration=duration,
                     allow_empty=(table_name == "raw_worldbank_indicators"),
+                    conn=state_conn,
                 )
                 parquet_paths[task_key] = info.path
                 logger.info(
@@ -313,8 +337,12 @@ def run_ingestion(
         )
 
     _, config_end_year = parse_date_range(active_settings.world_bank_date_range)
+    prefetched_metadata = {}
     resolved_indicators, current_api_updated = discover_indicators_and_last_updated(
-        indicators, effective_source_id, effective_max_indicators
+        indicators,
+        effective_source_id,
+        effective_max_indicators,
+        metadata_cache=prefetched_metadata,
     )
 
     task_specs = get_ingestion_tasks(resolved_indicators, source_id=effective_source_id)
@@ -413,6 +441,7 @@ def run_ingestion(
                 ingestion_run_id=ingestion_run_id,
                 resolved_indicators=resolved_indicators,
                 effective_source_id=effective_source_id,
+                prefetched_metadata=prefetched_metadata,
             )
             results = run_load_stage(
                 effective_task_specs,

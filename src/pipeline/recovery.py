@@ -38,6 +38,7 @@ def try_recover_extracted_parquet(
     run_data_dir,
     effective_state_schema,
     ingestion_run_id,
+    conn=None,
 ):
     candidate_path = (
         Path(cp["parquet_path"]) if cp.get("parquet_path") else (run_data_dir / f"{task_key}.parquet")
@@ -90,25 +91,27 @@ def try_recover_extracted_parquet(
         return candidate_path
 
     now = datetime.now(timezone.utc)
-    with open_db_connection() as conn:
-        save_extract_checkpoint(
-            conn,
-            effective_state_schema,
-            ingestion_run_id=ingestion_run_id,
-            table_name=table_name,
-            batch_id=expected_batch_id,
-            source_endpoint=endpoint,
-            parquet_path=candidate_path,
-            rows_extracted=recovered_rows,
-            last_extracted_page=cp.get("last_extracted_page") or 0,
-            last_checkpoint_key=cp.get("last_checkpoint_key"),
-            extracted_at=now,
-            started_at=now,
-            finished_at=now,
-            duration_seconds=0.0,
-            status="EXTRACTED",
-            task_key=task_key,
-        )
+    checkpoint_kwargs = {
+        "ingestion_run_id": ingestion_run_id,
+        "table_name": table_name,
+        "batch_id": expected_batch_id,
+        "source_endpoint": endpoint,
+        "parquet_path": candidate_path,
+        "rows_extracted": recovered_rows,
+        "last_extracted_page": cp.get("last_extracted_page") or 0,
+        "last_checkpoint_key": cp.get("last_checkpoint_key"),
+        "extracted_at": now,
+        "started_at": now,
+        "finished_at": now,
+        "duration_seconds": 0.0,
+        "status": "EXTRACTED",
+        "task_key": task_key,
+    }
+    if conn is not None and not getattr(conn, "closed", False):
+        save_extract_checkpoint(conn, effective_state_schema, **checkpoint_kwargs)
+    else:
+        with open_db_connection() as active_conn:
+            save_extract_checkpoint(active_conn, effective_state_schema, **checkpoint_kwargs)
     cp["extract_status"] = "EXTRACTED"
     cp["parquet_path"] = str(candidate_path)
     cp["rows_extracted"] = recovered_rows
@@ -135,8 +138,24 @@ def record_extract_metadata_with_retry(
     duration,
     allow_empty,
     max_attempts=3,
+    conn=None,
 ):
     last_err = None
+    checkpoint_kwargs = {
+        "ingestion_run_id": ingestion_run_id,
+        "table_name": table_name,
+        "batch_id": batch_id,
+        "source_endpoint": info.source_endpoint,
+        "parquet_path": info.path,
+        "rows_extracted": info.row_count,
+        "last_extracted_page": info.last_extracted_page,
+        "last_checkpoint_key": info.last_checkpoint_key,
+        "extracted_at": started_at,
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "duration_seconds": duration,
+        "task_key": task_key,
+    }
     for attempt in range(1, max_attempts + 1):
         try:
             if attempt > 1:
@@ -146,25 +165,11 @@ def record_extract_metadata_with_retry(
                     allow_empty=allow_empty,
                     expected_batch_id=batch_id,
                 )
-            with open_db_connection() as conn:
-                save_extract_checkpoint(
-                    conn,
-                    effective_state_schema,
-                    ingestion_run_id=ingestion_run_id,
-                    table_name=table_name,
-                    batch_id=batch_id,
-                    source_endpoint=info.source_endpoint,
-                    parquet_path=info.path,
-                    rows_extracted=info.row_count,
-                    last_extracted_page=info.last_extracted_page,
-                    last_checkpoint_key=info.last_checkpoint_key,
-                    extracted_at=started_at,
-                    started_at=started_at,
-                    finished_at=finished_at,
-                    duration_seconds=duration,
-                    status="EXTRACTED",
-                    task_key=task_key,
-                )
+            if attempt == 1 and conn is not None and not getattr(conn, "closed", False):
+                save_extract_checkpoint(conn, effective_state_schema, status="EXTRACTED", **checkpoint_kwargs)
+            else:
+                with open_db_connection() as retry_conn:
+                    save_extract_checkpoint(retry_conn, effective_state_schema, status="EXTRACTED", **checkpoint_kwargs)
             return
         except Exception as err:
             last_err = err
@@ -180,25 +185,13 @@ def record_extract_metadata_with_retry(
                 time.sleep(attempt)
 
     try:
-        with open_db_connection() as conn:
+        with open_db_connection() as active_conn:
             save_extract_checkpoint(
-                conn,
+                active_conn,
                 effective_state_schema,
-                ingestion_run_id=ingestion_run_id,
-                table_name=table_name,
-                batch_id=batch_id,
-                source_endpoint=info.source_endpoint,
-                parquet_path=info.path,
-                rows_extracted=info.row_count,
-                last_extracted_page=info.last_extracted_page,
-                last_checkpoint_key=info.last_checkpoint_key,
-                extracted_at=started_at,
-                started_at=started_at,
-                finished_at=finished_at,
-                duration_seconds=duration,
                 status="FILE_READY",
                 error_message=str(last_err),
-                task_key=task_key,
+                **checkpoint_kwargs,
             )
     except Exception as state_err:
         logger.warning(
