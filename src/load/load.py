@@ -1,18 +1,12 @@
 from datetime import datetime, timezone
 from pathlib import Path
-import sys
 import time
-import uuid
 import pandas as pd
 from psycopg import sql
 import pyarrow.parquet as pq
 
-if __package__ in (None, ""):
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
 from src.config.logger import get_logger, log_step
 from src.config.settings import VALID_LOAD_MODES, settings
-from src.extract.extract import get_ingestion_tasks
 from src.load.serializer import (
     INT_SERIALIZE_COLUMNS,
     attach_missing_raw_payload,
@@ -26,9 +20,6 @@ from src.load.sql_ops import (
     validate_loaded_batch_in_cur,
 )
 from src.metadata.state import (
-    create_or_resume_run,
-    ensure_state_schema,
-    finish_run,
     record_load_failure,
     update_load_checkpoint_in_cur,
     upsert_watermark_in_cur,
@@ -368,39 +359,3 @@ def load_parquet_files(
 
     logger.info("Đã đóng kết nối PostgreSQL.")
     return loaded_counts
-
-
-if __name__ == "__main__":
-    standalone_batch_id = str(uuid.uuid4())
-    with log_step(logger, f"Chạy độc lập Load Parquet -> PostgreSQL (batch_id={standalone_batch_id})"):
-        with open_db_connection() as conn:
-            ensure_state_schema(conn, settings.state_db_schema)
-            run_id, _, _ = create_or_resume_run(
-                conn,
-                settings.state_db_schema,
-                table_specs=get_ingestion_tasks(),
-                load_mode=settings.elt_load_mode,
-                target_schema=settings.tgt_db_schema,
-                data_dir=settings.raw_data_dir,
-                chunk_size=settings.elt_chunk_size,
-                auto_resume=False,
-            )
-
-        try:
-            load_parquet_files(
-                batch_id=standalone_batch_id,
-                state_schema=settings.state_db_schema,
-                ingestion_run_id=run_id,
-            )
-            with open_db_connection() as conn:
-                finish_run(conn, settings.state_db_schema, ingestion_run_id=run_id, status="SUCCESS")
-        except Exception as err:
-            with open_db_connection() as conn:
-                finish_run(
-                    conn,
-                    settings.state_db_schema,
-                    ingestion_run_id=run_id,
-                    status="FAILED",
-                    error_message=str(err),
-                )
-            raise

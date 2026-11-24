@@ -15,7 +15,6 @@ from src.metadata.schema import (
 from src.metadata.watermarks import (
     get_previously_loaded_tasks,
     get_watermarks,
-    table_has_rows,
     upsert_watermark_in_cur,
 )
 from src.storage.database import table_ref

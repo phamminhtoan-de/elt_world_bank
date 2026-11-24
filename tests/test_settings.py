@@ -2,7 +2,6 @@ import os
 from pathlib import Path
 import sys
 from unittest.mock import patch
-
 from src.config.settings import BASE_DIR, CONFIG_PATH, VALID_LOAD_MODES, load_settings
 from tests.helpers import assert_raises, resolve_dir
 
@@ -45,7 +44,6 @@ def test_load_settings_env_and_pipeline_yaml(tmp_path=None):
     assert default_cfg.elt_chunk_size == 5000
     assert default_cfg.elt_auto_resume is True
     assert default_cfg.elt_fresh is False
-    assert default_cfg.elt_backfill_payload is False
     assert default_cfg.elt_incremental_lookback_years == 3
     assert default_cfg.save_raw_parquet is True
     assert default_cfg.elt_run_id is None
@@ -107,7 +105,6 @@ def test_load_settings_env_and_pipeline_yaml(tmp_path=None):
     assert custom_cfg.elt_chunk_size == 1200
     assert custom_cfg.elt_auto_resume is False
     assert custom_cfg.elt_fresh is True
-    assert custom_cfg.elt_backfill_payload is True
     assert custom_cfg.elt_incremental_lookback_years == 0
     assert custom_cfg.save_raw_parquet is False
     assert custom_cfg.elt_run_id == "run-override-99"

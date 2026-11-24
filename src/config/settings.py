@@ -236,7 +236,6 @@ def load_settings(config_path=CONFIG_PATH):
         elt_chunk_size=get_yaml_int(pipeline_section, "chunk_size", 5000, min_value=1),
         elt_auto_resume=get_yaml_bool(pipeline_section, "auto_resume", True),
         elt_fresh=get_yaml_bool(pipeline_section, "fresh", False),
-        elt_backfill_payload=backfill_raw_payload_enabled,
         elt_incremental_lookback_years=get_yaml_int(
             incremental_section, "lookback_years", 3, min_value=0
         ),

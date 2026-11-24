@@ -1,15 +1,9 @@
 from datetime import datetime, timezone
-from pathlib import Path
-import sys
 import time
-import requests
 
-if __package__ in (None, ""):
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
-from src.config.logger import get_logger, log_step
+from src.config.logger import get_logger
 from src.config.settings import settings
-from src.extract.api_client import fetch_source_indicators, iter_all_pages
+from src.extract.api_client import iter_all_pages
 from src.extract.parser import (
     INDICATORS,
     flatten_country_row,
@@ -307,52 +301,3 @@ def extract_task_to_parquet(
             endpoint,
         )
     return info
-
-
-def extract_all_to_parquet(
-    output_dir=None,
-    indicators=None,
-    chunk_size=None,
-    ingestion_run_id="",
-    batch_ids=None,
-    source_id=None,
-    max_indicators=None,
-):
-    effective_chunk_size = chunk_size if chunk_size is not None else settings.elt_chunk_size
-    infos = []
-
-    with requests.Session() as session:
-        target_indicators = (
-            tuple(indicators)
-            if indicators is not None
-            else fetch_source_indicators(
-                session, source_id=source_id, max_indicators=max_indicators
-            )
-        )
-        for task_key, table_name, indicator_code, endpoint in get_ingestion_tasks(
-            target_indicators, source_id=source_id
-        ):
-            task_batch_id = (batch_ids or {}).get(task_key, "")
-            with log_step(logger, f"Extract & ghi Parquet: {task_key} ({endpoint})"):
-                info = extract_task_to_parquet(
-                    session,
-                    task_key,
-                    table_name,
-                    indicator_code,
-                    output_dir=output_dir,
-                    chunk_size=effective_chunk_size,
-                    batch_id=task_batch_id,
-                    ingestion_run_id=ingestion_run_id,
-                    indicators=target_indicators,
-                    source_id=source_id,
-                )
-                logger.info("Đã lưu %s dòng vào %s.", f"{info.row_count:,}", info.path)
-                infos.append(info)
-
-    return infos
-
-
-if __name__ == "__main__":
-    with log_step(logger, "Chạy độc lập Extract World Bank API -> Parquet (Streaming)"):
-        for info in extract_all_to_parquet():
-            logger.info("Hoàn tất file Parquet: %s (%s dòng)", info.path, f"{info.row_count:,}")
