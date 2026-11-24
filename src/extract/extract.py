@@ -49,15 +49,34 @@ def get_ingestion_tasks(indicators=None, source_id=None):
 def iter_countries(session, *, batch_id="", ingestion_run_id="", extracted_at=None, progress=None):
     url = f"{settings.world_bank_api_url}/country"
     ts = extracted_at or datetime.now(timezone.utc).isoformat()
+    raw_count = 0
+    kept_count = 0
     for _, row in iter_all_pages(
         session, url, {}, "countries", progress=progress, checkpoint_key="countries"
     ):
-        yield flatten_country_row(
+        raw_count += 1
+        record = flatten_country_row(
             row,
             extracted_at=ts,
             batch_id=batch_id,
             source_endpoint=url,
             ingestion_run_id=ingestion_run_id,
+        )
+        if not str(record["country_iso3"]).strip():
+            continue
+        kept_count += 1
+        yield record
+
+    dropped = raw_count - kept_count
+    if dropped > 0:
+        logger.warning(
+            "[DROP INVALID KEY] raw_worldbank_countries: bỏ %d/%d dòng thiếu country_iso3.",
+            dropped,
+            raw_count,
+        )
+    if raw_count > 0 and kept_count == 0:
+        raise ValueError(
+            f"Bảng raw_worldbank_countries nhận {raw_count} dòng từ API nhưng toàn bộ đều thiếu country_iso3."
         )
 
 
@@ -133,6 +152,10 @@ def iter_indicators(
     effective_date_range = date_range or settings.world_bank_date_range
     for idx, code in enumerate(indicators, start=1):
         url = f"{settings.world_bank_api_url}/country/all/indicator/{code}"
+        raw_count = 0
+        kept_count = 0
+        dropped_invalid_year = 0
+        dropped_missing_country = 0
         for meta, row in iter_all_pages(
             session,
             url,
@@ -141,7 +164,8 @@ def iter_indicators(
             progress=progress,
             checkpoint_key=code,
         ):
-            yield flatten_indicator_row(
+            raw_count += 1
+            record = flatten_indicator_row(
                 row,
                 meta,
                 code,
@@ -149,6 +173,32 @@ def iter_indicators(
                 batch_id=batch_id,
                 source_endpoint=url,
                 ingestion_run_id=ingestion_run_id,
+            )
+            missing_year = record["year"] is None
+            missing_country = not record["country_iso2"]
+            missing_indicator = not record["indicator_code"]
+            if missing_year or missing_country or missing_indicator:
+                if missing_year:
+                    dropped_invalid_year += 1
+                if missing_country:
+                    dropped_missing_country += 1
+                continue
+            kept_count += 1
+            yield record
+
+        dropped_total = raw_count - kept_count
+        if dropped_total > 0:
+            logger.warning(
+                "[DROP INVALID KEY] %s: bỏ %d/%d dòng thiếu khóa (invalid_year=%d, missing_country=%d).",
+                code,
+                dropped_total,
+                raw_count,
+                dropped_invalid_year,
+                dropped_missing_country,
+            )
+        if raw_count > 0 and kept_count == 0:
+            raise ValueError(
+                f"Chỉ số '{code}' nhận {raw_count} dòng từ API nhưng toàn bộ đều thiếu khóa hợp lệ (invalid_year={dropped_invalid_year}, missing_country={dropped_missing_country})."
             )
         if idx < len(indicators):
             time.sleep(settings.world_bank_sleep_seconds)

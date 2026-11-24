@@ -8,6 +8,20 @@ from src.extract.parser import INDICATORS
 logger = get_logger(__name__)
 
 RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
+RETRYABLE_API_ERROR_IDS = frozenset({"105", "175"})
+
+
+def extract_api_error(payload):
+    if isinstance(payload, list) and len(payload) == 1 and isinstance(payload[0], dict):
+        messages = payload[0].get("message")
+        if isinstance(messages, list) and messages and isinstance(messages[0], dict):
+            first = messages[0]
+            error_id = str(first.get("id") or "").strip()
+            error_key = str(first.get("key") or "").strip()
+            error_val = str(first.get("value") or "").strip()
+            detail = " - ".join(part for part in (error_key, error_val) if part) or str(first)
+            return error_id, detail
+    return None, None
 
 
 def resolve_retry_wait(attempt, response=None):
@@ -38,8 +52,33 @@ def fetch_json_page(session, url, params):
             )
             response.raise_for_status()
             payload = response.json()
+            error_id, error_detail = extract_api_error(payload)
+            if error_id is not None:
+                if error_id in RETRYABLE_API_ERROR_IDS:
+                    if attempt == max_retries:
+                        raise RuntimeError(
+                            f"Lỗi API World Bank tạm thời (id={error_id}) tại {url} (page={params.get('page')}) sau {max_retries} lần thử: {error_detail}"
+                        )
+                    wait_time = resolve_retry_wait(attempt)
+                    logger.warning(
+                        "[Thử lại %d/%d] API World Bank trả lỗi tạm thời (id=%s) tại %s (page=%s): %s, chờ %.1fs...",
+                        attempt,
+                        max_retries,
+                        error_id,
+                        url,
+                        params.get("page"),
+                        error_detail,
+                        wait_time,
+                    )
+                    time.sleep(wait_time)
+                    continue
+                raise RuntimeError(
+                    f"Lỗi API World Bank (id={error_id}) tại {url} (page={params.get('page')}): {error_detail}"
+                )
             if not isinstance(payload, list) or len(payload) < 2:
-                return {}, []
+                raise ValueError(
+                    f"Payload JSON không hợp lệ từ {url} (page={params.get('page')}): {payload!r}"
+                )
             meta = payload[0] if isinstance(payload[0], dict) else {}
             rows = payload[1] if isinstance(payload[1], list) else []
             return meta, rows
@@ -50,7 +89,12 @@ def fetch_json_page(session, url, params):
                     f"Lỗi HTTP {status} khi gọi API {url} (page={params.get('page')}): {err}"
                 ) from err
             wait_time = resolve_retry_wait(attempt, err.response)
-        except (requests.Timeout, requests.ConnectionError) as err:
+        except (
+            requests.Timeout,
+            requests.ConnectionError,
+            requests.exceptions.ChunkedEncodingError,
+            ValueError,
+        ) as err:
             if attempt == max_retries:
                 raise RuntimeError(
                     f"Lỗi khi gọi API {url} (page={params.get('page')}) sau {max_retries} lần thử: {err}"
@@ -71,7 +115,9 @@ def fetch_json_page(session, url, params):
         )
         time.sleep(wait_time)
 
-    return {}, []
+    raise RuntimeError(
+        f"Không thể lấy dữ liệu từ API {url} (page={params.get('page')}) sau {max_retries} lần thử."
+    )
 
 
 def iter_all_pages(session, url, base_params, label, progress=None, checkpoint_key=""):

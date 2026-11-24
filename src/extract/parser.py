@@ -32,6 +32,15 @@ def serialize_raw_payload(row):
     return json.dumps(row, ensure_ascii=False, separators=(",", ":"), default=str)
 
 
+def parse_optional_year(raw_date):
+    if raw_date is None or isinstance(raw_date, bool):
+        return None
+    text = str(raw_date).strip()
+    if len(text) == 4 and text.isascii() and text.isdigit():
+        return int(text)
+    return None
+
+
 PARQUET_SCHEMAS = {
     "raw_worldbank_indicators": make_schema(
         [
@@ -188,13 +197,16 @@ def flatten_indicator_row(
     country = row.get("country") or {}
     indicator = row.get("indicator") or {}
     raw_date = row.get("date")
+    country_iso3 = str(row.get("countryiso3code") or "").strip()
+    country_iso2 = str(country.get("id") or "").strip() or country_iso3
+    indicator_code = str(indicator.get("id") or fallback_indicator or "").strip()
     return {
-        "country_iso3": row.get("countryiso3code") or "",
-        "country_iso2": country.get("id") or "",
+        "country_iso3": country_iso3,
+        "country_iso2": country_iso2,
         "country_name": country.get("value") or "",
-        "indicator_code": indicator.get("id") or fallback_indicator,
+        "indicator_code": indicator_code,
         "indicator_name": indicator.get("value") or "",
-        "year": int(raw_date) if raw_date else None,
+        "year": parse_optional_year(raw_date),
         "value": row.get("value"),
         "unit": row.get("unit") or "",
         "obs_status": row.get("obs_status") or "",

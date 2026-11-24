@@ -1,12 +1,13 @@
 from pathlib import Path
 import sys
 from unittest.mock import MagicMock, patch
-
 from src.extract import extract as extract_module
 from src.extract.extract import (
     extract_task_to_parquet,
     get_ingestion_tasks,
+    iter_countries,
     iter_indicator_metadata,
+    iter_indicators,
 )
 from tests.helpers import assert_raises, resolve_dir
 
@@ -138,7 +139,83 @@ def test_extract_task_to_parquet_and_validation(tmp_path=None):
     )
 
 
+def test_iter_drops_invalid_keys_and_raises_when_all_dropped():
+    mixed_rows = [
+        (
+            {"sourceid": "2", "lastupdated": "2026-11-11"},
+            {
+                "country": {"id": "VN", "value": "Viet Nam"},
+                "indicator": {"id": "NY.GDP.MKTP.CD", "value": "GDP"},
+                "countryiso3code": "VNM",
+                "date": "2024",
+                "value": 100.0,
+            },
+        ),
+        (
+            {"sourceid": "2", "lastupdated": "2026-11-11"},
+            {
+                "country": {"id": "", "value": "World"},
+                "indicator": {"id": "NY.GDP.MKTP.CD", "value": "GDP"},
+                "countryiso3code": "WLD",
+                "date": "2024",
+                "value": 200.0,
+            },
+        ),
+        (
+            {"sourceid": "2", "lastupdated": "2026-11-11"},
+            {
+                "country": {"id": "VN", "value": "Viet Nam"},
+                "indicator": {"id": "NY.GDP.MKTP.CD", "value": "GDP"},
+                "countryiso3code": "VNM",
+                "date": "2023Q1",
+                "value": 50.0,
+            },
+        ),
+        (
+            {"sourceid": "2", "lastupdated": "2026-11-11"},
+            {
+                "country": {"id": "", "value": "Unknown"},
+                "indicator": {"id": "NY.GDP.MKTP.CD", "value": "GDP"},
+                "countryiso3code": "",
+                "date": "2024",
+                "value": 10.0,
+            },
+        ),
+    ]
+    with patch.object(extract_module, "iter_all_pages", return_value=iter(mixed_rows)):
+        kept = list(iter_indicators(MagicMock(), ("NY.GDP.MKTP.CD",)))
+    assert [(r["country_iso2"], r["year"]) for r in kept] == [("VN", 2024), ("WLD", 2024)]
+
+    all_bad_rows = [
+        (
+            {},
+            {
+                "country": {"id": "VN", "value": "Viet Nam"},
+                "indicator": {"id": "NY.GDP.MKTP.CD", "value": "GDP"},
+                "date": "2023Q1",
+                "value": 50.0,
+            },
+        ),
+        (
+            {},
+            {
+                "country": {"id": "", "value": "Unknown"},
+                "indicator": {"id": "NY.GDP.MKTP.CD", "value": "GDP"},
+                "countryiso3code": "",
+                "date": "2024",
+                "value": 10.0,
+            },
+        ),
+    ]
+    with patch.object(extract_module, "iter_all_pages", return_value=iter(all_bad_rows)):
+        assert_raises(ValueError, lambda: list(iter_indicators(MagicMock(), ("NY.GDP.MKTP.CD",))))
+
+    with patch.object(extract_module, "iter_all_pages", return_value=iter([({}, {"id": ""})])):
+        assert_raises(ValueError, lambda: list(iter_countries(MagicMock())))
+
+
 if __name__ == "__main__":
     test_get_ingestion_tasks_and_bulk_metadata()
     test_extract_task_to_parquet_and_validation()
+    test_iter_drops_invalid_keys_and_raises_when_all_dropped()
     print("EXTRACT TESTS PASSED")

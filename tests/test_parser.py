@@ -3,7 +3,6 @@ import json
 from pathlib import Path
 import sys
 import pandas as pd
-
 from src.extract.parser import (
     COUNTRY_COLUMNS,
     INDICATOR_COLUMNS,
@@ -13,6 +12,7 @@ from src.extract.parser import (
     flatten_indicator_meta_row,
     flatten_indicator_row,
     parse_date_range,
+    parse_optional_year,
     records_to_dataframe,
 )
 from tests.helpers import assert_raises
@@ -98,6 +98,32 @@ def test_flatten_rows_valid_and_malformed():
     assert indicator_bad["year"] is None
     assert indicator_bad["value"] is None
     assert indicator_bad["country_iso3"] == ""
+
+    assert parse_optional_year("2024") == 2024
+    assert parse_optional_year(2024) == 2024
+    assert parse_optional_year("2023Q1") is None
+    assert parse_optional_year("2023M05") is None
+    assert parse_optional_year("") is None
+    assert parse_optional_year(None) is None
+    assert parse_optional_year(True) is None
+    assert parse_optional_year("202") is None
+    assert parse_optional_year("\u0662\u0660\u0662\u0663") is None
+    assert parse_optional_year("\u00b2\u00b3\u2074\u2075") is None
+
+    indicator_quarter = flatten_indicator_row(
+        {
+            "country": {"id": "", "value": "World"},
+            "indicator": {"id": "NY.GDP.MKTP.CD", "value": "GDP"},
+            "countryiso3code": "WLD",
+            "date": "2023Q1",
+            "value": 10.0,
+        },
+        {},
+        "IND.FALLBACK",
+    )
+    assert indicator_quarter["country_iso2"] == "WLD"
+    assert indicator_quarter["year"] is None
+    assert json.loads(indicator_quarter["raw_payload"])["date"] == "2023Q1"
 
 
 def test_chunked_and_records_to_dataframe():
