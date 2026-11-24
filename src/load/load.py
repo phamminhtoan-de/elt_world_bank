@@ -206,19 +206,18 @@ def stream_chunks_to_postgres(
                         status="LOADED",
                         task_key=resolved_task_key,
                     )
-                    upsert_watermark_in_cur(
-                        cur,
-                        state_schema,
-                        target_schema=schema,
-                        task_key=resolved_task_key,
-                        table_name=table_name,
-                        indicator_code=indicator_code,
-                        last_loaded_year=(
-                            observed_max_year if observed_max_year is not None else watermark_year
-                        ),
-                        api_last_updated=(observed_last_updated or api_last_updated or None),
-                        last_run_id=ingestion_run_id,
-                    )
+                    if rows_loaded > 0:
+                        upsert_watermark_in_cur(
+                            cur,
+                            state_schema,
+                            target_schema=schema,
+                            task_key=resolved_task_key,
+                            table_name=table_name,
+                            indicator_code=indicator_code,
+                            last_loaded_year=observed_max_year,
+                            api_last_updated=(observed_last_updated or api_last_updated or None),
+                            last_run_id=ingestion_run_id,
+                        )
 
         logger.info("  -> Đã nạp %s dòng vào %s (mode=%s, batch_id=%s).", f"{rows_loaded:,}", full_table, load_mode, batch_id)
         return rows_loaded

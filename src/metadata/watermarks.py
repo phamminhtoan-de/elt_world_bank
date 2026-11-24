@@ -61,24 +61,20 @@ def upsert_watermark_in_cur(
     cur.execute(
         sql.SQL(
             """
-            INSERT INTO {} (
+            INSERT INTO {wm} (
                 target_schema, task_key, table_name, indicator_code,
                 last_loaded_year, api_last_updated, last_run_id, updated_at
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
             ON CONFLICT (target_schema, task_key) DO UPDATE SET
                 table_name = EXCLUDED.table_name,
-                indicator_code = COALESCE(EXCLUDED.indicator_code, {}.indicator_code),
-                last_loaded_year = CASE
-                    WHEN {}.last_loaded_year IS NULL THEN EXCLUDED.last_loaded_year
-                    WHEN EXCLUDED.last_loaded_year IS NULL THEN {}.last_loaded_year
-                    ELSE GREATEST({}.last_loaded_year, EXCLUDED.last_loaded_year)
-                END,
-                api_last_updated = COALESCE(EXCLUDED.api_last_updated, {}.api_last_updated),
-                last_run_id = COALESCE(EXCLUDED.last_run_id, {}.last_run_id),
+                indicator_code = COALESCE(EXCLUDED.indicator_code, {wm}.indicator_code),
+                last_loaded_year = GREATEST({wm}.last_loaded_year, EXCLUDED.last_loaded_year),
+                api_last_updated = GREATEST({wm}.api_last_updated, EXCLUDED.api_last_updated),
+                last_run_id = COALESCE(EXCLUDED.last_run_id, {wm}.last_run_id),
                 updated_at = CURRENT_TIMESTAMP
             """
-        ).format(wm_ref, wm_ref, wm_ref, wm_ref, wm_ref, wm_ref, wm_ref),
+        ).format(wm=wm_ref),
         (
             target_schema,
             task_key,
